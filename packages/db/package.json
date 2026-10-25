@@ -1,0 +1,26 @@
+{
+  "name": "@kokeb/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prisma schema, migrations and client. Two Postgres schemas: `platform` (players, wallet, ledger) and `games` (game engines' own data).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "studio": "prisma studio",
+    "typecheck": "tsc -p tsconfig.json",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "dotenv": "^17.2.0"
+  },
+  "devDependencies": {
+    "prisma": "7.10.1"
+  }
+}

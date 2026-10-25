@@ -1,0 +1,240 @@
+// Kokeb Games database.
+//
+// Two Postgres schemas keep the platform and the games apart:
+//   platform: players, game catalog, sessions, wallet accounts and the ledger
+//   games:    data owned by the game engines (crash rounds, bingo rooms...)
+//
+// Rule: code in packages/games never reads or writes `platform` tables. It
+// only talks to the platform through the wallet contract.
+//
+// Money columns are BigInt minor units (santim; 1 ETB = 100 santim).
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["platform", "games"]
+}
+
+// ───────────────────────────── Players ─────────────────────────────
+
+enum PlayerStatus {
+  ACTIVE
+  BLOCKED
+  SELF_EXCLUDED
+
+  @@schema("platform")
+}
+
+/// A person who registered through the Telegram bot (shares their phone).
+model Player {
+  id         String       @id @default(uuid()) @db.Uuid
+  telegramId BigInt       @unique @map("telegram_id")
+  phone      String?      @unique
+  username   String?
+  firstName  String       @map("first_name")
+  lastName   String?      @map("last_name")
+  language   String?
+  status     PlayerStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+
+  accounts Account[]
+  sessions GameSession[]
+
+  @@map("players")
+  @@schema("platform")
+}
+
+// ─────────────────────── Game catalog & sessions ───────────────────────
+
+enum ProviderKind {
+  /// Our own games (crash, bingo), running in this repo.
+  INTERNAL
+  /// A third-party studio that calls our wallet API over HTTP.
+  EXTERNAL
+
+  @@schema("platform")
+}
+
+/// Who supplies a game: "kokeb" for our own, or an external studio.
+model GameProvider {
+  id               String       @id // slug, e.g. "kokeb", "spribe"
+  name             String
+  kind             ProviderKind
+  /// Base URL of the provider's launch API (EXTERNAL only).
+  launchUrl        String?      @map("launch_url")
+  /// HMAC secret for signed wallet calls (EXTERNAL only). Encrypt at rest before production.
+  walletSecret     String?      @map("wallet_secret")
+  active           Boolean      @default(true)
+  createdAt        DateTime     @default(now()) @map("created_at")
+
+  games Game[]
+
+  @@map("game_providers")
+  @@schema("platform")
+}
+
+/// One entry in the lobby.
+model Game {
+  id             String   @id // our slug, e.g. "kokeb-crash"
+  providerId     String   @map("provider_id")
+  /// The provider's own id for this game.
+  providerGameId String   @map("provider_game_id")
+  name           String
+  /// "crash", "bingo", "slot", ...
+  category       String
+  thumbnailUrl   String?  @map("thumbnail_url")
+  demoEnabled    Boolean  @default(true) @map("demo_enabled")
+  active         Boolean  @default(true)
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  provider GameProvider  @relation(fields: [providerId], references: [id])
+  sessions GameSession[]
+
+  @@unique([providerId, providerGameId])
+  @@map("games")
+  @@schema("platform")
+}
+
+enum SessionMode {
+  REAL
+  DEMO
+
+  @@schema("platform")
+}
+
+/// Created when a player taps "Play Now" / "Try Demo".
+model GameSession {
+  id        String      @id @default(uuid()) @db.Uuid
+  token     String      @unique
+  playerId  String      @map("player_id") @db.Uuid
+  gameId    String      @map("game_id")
+  mode      SessionMode
+  currency  Currency
+  createdAt DateTime    @default(now()) @map("created_at")
+  expiresAt DateTime    @map("expires_at")
+
+  player Player @relation(fields: [playerId], references: [id])
+  game   Game   @relation(fields: [gameId], references: [id])
+
+  @@index([playerId])
+  @@map("game_sessions")
+  @@schema("platform")
+}
+
+// ─────────────────────────── Wallet & ledger ───────────────────────────
+//
+// Double-entry bookkeeping: every money movement is one LedgerTransaction
+// with entries that sum to zero. A bet moves money from the player's account
+// to the house; a win moves it back; a deposit moves it from cash clearing to
+// the player.
+
+enum Currency {
+  ETB
+  DEMO
+
+  @@schema("platform")
+}
+
+enum AccountKind {
+  /// A player's wallet. Never negative.
+  PLAYER
+  /// House gaming account: receives stakes, pays wins.
+  HOUSE_GAMING
+  /// Money in transit with payment providers (deposits in, withdrawals out).
+  CASH_CLEARING
+  /// Source of play money for demo mode.
+  DEMO_FAUCET
+
+  @@schema("platform")
+}
+
+model Account {
+  id            String      @id @default(uuid()) @db.Uuid
+  kind          AccountKind
+  currency      Currency
+  playerId      String?     @map("player_id") @db.Uuid
+  /// Identifies a system account, e.g. "HOUSE_GAMING:ETB". Null for players.
+  systemKey     String?     @unique @map("system_key")
+  /// Cached balance. Only maintained for PLAYER accounts (system accounts
+  /// are hot rows; their balance is the sum of their entries).
+  balance       BigInt      @default(0)
+  allowNegative Boolean     @default(false) @map("allow_negative")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  player  Player?       @relation(fields: [playerId], references: [id])
+  entries LedgerEntry[]
+
+  @@unique([playerId, currency])
+  @@map("accounts")
+  @@schema("platform")
+}
+
+enum LedgerTxType {
+  BET
+  WIN
+  ROLLBACK
+  DEPOSIT
+  WITHDRAWAL
+  DEMO_GRANT
+
+  @@schema("platform")
+}
+
+model LedgerTransaction {
+  id                   String       @id @default(uuid()) @db.Uuid
+  type                 LedgerTxType
+  currency             Currency
+  /// Who initiated it: a game provider id ("kokeb", "spribe") or a payment
+  /// provider ("chapa"). Together with playerId and externalTxId it is the
+  /// idempotency key.
+  source               String
+  playerId             String?      @map("player_id") @db.Uuid
+  externalTxId         String       @map("external_tx_id")
+  gameId               String?      @map("game_id")
+  roundId              String?      @map("round_id")
+  /// Always >= 0; direction comes from the type.
+  amount               BigInt
+  /// ROLLBACK only: the txId of the debit being reversed.
+  originalExternalTxId String?      @map("original_external_tx_id")
+  /// BET only: true once reversed by a rollback.
+  rolledBack           Boolean      @default(false) @map("rolled_back")
+  createdAt            DateTime     @default(now()) @map("created_at")
+
+  entries LedgerEntry[]
+
+  @@unique([source, playerId, externalTxId])
+  @@index([source, playerId, roundId])
+  @@index([source, playerId, originalExternalTxId], map: "ledger_transactions_rollback_lookup_idx")
+  @@map("ledger_transactions")
+  @@schema("platform")
+}
+
+model LedgerEntry {
+  id            BigInt   @id @default(autoincrement())
+  transactionId String   @map("transaction_id") @db.Uuid
+  accountId     String   @map("account_id") @db.Uuid
+  /// Signed: negative leaves the account, positive enters it.
+  amount        BigInt
+  /// Account balance after this entry (PLAYER accounts only).
+  balanceAfter  BigInt?  @map("balance_after")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  transaction LedgerTransaction @relation(fields: [transactionId], references: [id])
+  account     Account           @relation(fields: [accountId], references: [id])
+
+  @@index([accountId, id])
+  @@index([transactionId])
+  @@map("ledger_entries")
+  @@schema("platform")
+}
+
+// ───────────────────────────── games schema ─────────────────────────────
+// Game engine tables (crash rounds, bingo rooms) arrive with the engines.

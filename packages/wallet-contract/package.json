@@ -1,0 +1,21 @@
+{
+  "name": "@kokeb/wallet-contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The wallet API every Kokeb game (own or third-party) uses to move money. Neutral: depends on nothing else in the repo.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./conformance": "./src/conformance.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "vitest": "*"
+  },
+  "peerDependenciesMeta": {
+    "vitest": { "optional": true }
+  }
+}

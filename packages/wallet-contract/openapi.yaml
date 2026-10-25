@@ -1,0 +1,199 @@
+openapi: 3.1.0
+info:
+  title: Kokeb Wallet API
+  version: 0.1.0
+  description: |
+    The HTTP form of the Kokeb wallet contract. A game server (our own, when it
+    runs standalone, or a third-party provider) calls these four endpoints on
+    the platform to move a player's money. It is the same contract as the
+    `WalletPort` TypeScript interface in `src/types.ts`.
+
+    **Money.** All amounts are integers in minor units (santim; 1 ETB = 100),
+    sent as JSON *strings* so no client loses precision.
+
+    **Idempotency.** `txId` is unique per (provider, player). Repeating a
+    request with the same `txId` and payload returns the stored result with
+    `duplicate: true` and moves no money. Same `txId` with a different payload
+    returns `TX_CONFLICT`.
+
+    **Signing.** Every request carries:
+      - `X-Kokeb-Provider`: the caller's provider id
+      - `X-Kokeb-Timestamp`: unix seconds (rejected if more than 300s off)
+      - `X-Kokeb-Signature`: hex(HMAC-SHA256(secret, timestamp + "." + rawBody))
+
+    **Retries.** On a network error, timeout or a `retryable: true` error,
+    retry with the SAME `txId`. For a debit you may instead send a rollback.
+    Credits must be retried until acknowledged and are never rolled back.
+
+    **Demo play.** Use currency `DEMO`. Everything else is identical.
+servers:
+  - url: https://api.kokeb.games/wallet/v1
+security:
+  - kokebSignature: []
+paths:
+  /balance:
+    post:
+      operationId: balance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BalanceRequest" }
+      responses:
+        "200":
+          description: Current balance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BalanceResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /debit:
+    post:
+      operationId: debit
+      description: Take a stake from the player. `amount` must be > 0.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DebitRequest" }
+      responses:
+        "200":
+          description: Debit recorded (or already recorded)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TxResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /credit:
+    post:
+      operationId: credit
+      description: |
+        Pay the player for a round. `amount` may be 0 (a loss). Only accepted
+        for a round with at least one live debit from this player in the same
+        currency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreditRequest" }
+      responses:
+        "200":
+          description: Credit recorded (or already recorded)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TxResult" }
+        default: { $ref: "#/components/responses/Error" }
+  /rollback:
+    post:
+      operationId: rollback
+      description: |
+        Reverse a debit. If the debit is unknown, the rollback is still
+        recorded and a later debit with `originalTxId` is refused with
+        `TX_ALREADY_ROLLED_BACK`. Rolling back a credit returns
+        `ROLLBACK_NOT_ALLOWED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RollbackRequest" }
+      responses:
+        "200":
+          description: Rollback recorded (or already recorded)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TxResult" }
+        default: { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    kokebSignature:
+      type: apiKey
+      in: header
+      name: X-Kokeb-Signature
+  schemas:
+    Currency:
+      type: string
+      enum: [ETB, DEMO]
+    Amount:
+      type: string
+      pattern: "^[0-9]+$"
+      description: Integer minor units (santim)
+      examples: ["400"]
+    BalanceRequest:
+      type: object
+      required: [playerId, currency]
+      properties:
+        playerId: { type: string }
+        currency: { $ref: "#/components/schemas/Currency" }
+    TxFields:
+      type: object
+      required: [txId, playerId, currency, gameId, roundId]
+      properties:
+        txId: { type: string, maxLength: 128 }
+        playerId: { type: string }
+        currency: { $ref: "#/components/schemas/Currency" }
+        gameId: { type: string, maxLength: 128 }
+        roundId: { type: string, maxLength: 128 }
+    DebitRequest:
+      allOf:
+        - $ref: "#/components/schemas/TxFields"
+        - type: object
+          required: [amount]
+          properties:
+            amount: { $ref: "#/components/schemas/Amount" }
+    CreditRequest:
+      allOf:
+        - $ref: "#/components/schemas/TxFields"
+        - type: object
+          required: [amount]
+          properties:
+            amount: { $ref: "#/components/schemas/Amount" }
+    RollbackRequest:
+      allOf:
+        - $ref: "#/components/schemas/TxFields"
+        - type: object
+          required: [originalTxId]
+          properties:
+            originalTxId: { type: string, maxLength: 128 }
+    BalanceResult:
+      type: object
+      required: [playerId, currency, balance]
+      properties:
+        playerId: { type: string }
+        currency: { $ref: "#/components/schemas/Currency" }
+        balance: { $ref: "#/components/schemas/Amount" }
+    TxResult:
+      allOf:
+        - $ref: "#/components/schemas/BalanceResult"
+        - type: object
+          required: [txId, walletTxId, duplicate]
+          properties:
+            txId: { type: string }
+            walletTxId: { type: string }
+            duplicate: { type: boolean }
+    Error:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+          enum:
+            - INSUFFICIENT_FUNDS
+            - PLAYER_NOT_FOUND
+            - INVALID_REQUEST
+            - TX_CONFLICT
+            - TX_ALREADY_ROLLED_BACK
+            - ROUND_NOT_FOUND
+            - ROLLBACK_NOT_ALLOWED
+            - PLAYER_BLOCKED
+            - UNAUTHORIZED
+            - INTERNAL
+        message: { type: string }
+        retryable: { type: boolean }
+  responses:
+    Error:
+      description: |
+        Failure. Status codes: 400 INVALID_REQUEST, 401 UNAUTHORIZED,
+        402 INSUFFICIENT_FUNDS, 403 PLAYER_BLOCKED, 404 PLAYER_NOT_FOUND /
+        ROUND_NOT_FOUND, 409 TX_CONFLICT / TX_ALREADY_ROLLED_BACK /
+        ROLLBACK_NOT_ALLOWED, 500 INTERNAL (retryable).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

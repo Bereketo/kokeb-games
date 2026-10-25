@@ -1,0 +1,16 @@
+{
+  "name": "@kokeb/games",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Our own games (crash, bingo) and the provably-fair module. Depends ONLY on @kokeb/wallet-contract, never on @kokeb/platform.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@kokeb/wallet-contract": "workspace:*"
+  }
+}
