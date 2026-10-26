@@ -1,0 +1,23 @@
+{
+  "name": "@kokeb/game-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Long-running game process: crash round loop, WebSocket gateway and a browser test page.",
+  "scripts": {
+    "start": "node src/main.ts",
+    "dev": "node --watch src/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kokeb/db": "workspace:*",
+    "@kokeb/games": "workspace:*",
+    "@kokeb/platform": "workspace:*",
+    "@kokeb/wallet-contract": "workspace:*",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

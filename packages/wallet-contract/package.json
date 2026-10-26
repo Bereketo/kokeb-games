@@ -6,7 +6,8 @@
   "description": "The wallet API every Kokeb game (own or third-party) uses to move money. Neutral: depends on nothing else in the repo.",
   "exports": {
     ".": "./src/index.ts",
-    "./conformance": "./src/conformance.ts"
+    "./conformance": "./src/conformance.ts",
+    "./testing": "./src/memory-wallet.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
@@ -16,6 +17,8 @@
     "vitest": "*"
   },
   "peerDependenciesMeta": {
-    "vitest": { "optional": true }
+    "vitest": {
+      "optional": true
+    }
   }
 }

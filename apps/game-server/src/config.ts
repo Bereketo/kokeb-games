@@ -1,0 +1,42 @@
+import { existsSync } from "node:fs";
+
+const rootEnv = new URL("../../../.env", import.meta.url);
+if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
+
+const env = process.env;
+const production = env.NODE_ENV === "production";
+
+function required(name: string, devDefault: string): string {
+  const v = env[name];
+  if (v) return v;
+  if (production) throw new Error(`${name} must be set in production`);
+  console.warn(`[config] ${name} not set, using an insecure development value`);
+  return devDefault;
+}
+
+function int(name: string, fallback: number): number {
+  const v = env[name];
+  if (!v) return fallback;
+  const n = Number(v);
+  if (!Number.isInteger(n)) throw new Error(`${name} must be an integer`);
+  return n;
+}
+
+export const config = {
+  production,
+  port: int("GAME_SERVER_PORT", 4001),
+  /** Name shown to players. */
+  displayName: env.GAME_DISPLAY_NAME || "Crash",
+  /** Secret that generates the provably-fair hash chain. NEVER change or leak it while the chain is in use. */
+  chainSecret: required("CRASH_CHAIN_SECRET", "development-only-chain-secret-do-not-use-in-production"),
+  chainLength: int("CRASH_CHAIN_LENGTH", 1_000_000),
+  /** Public salt, fixed AFTER the chain commitment is published (e.g. a future Bitcoin block hash). */
+  salt: required("CRASH_SALT", "development-salt"),
+  houseEdgeBps: int("CRASH_HOUSE_EDGE_BPS", 300),
+  bettingMs: int("CRASH_BETTING_MS", 6_000),
+  cooldownMs: int("CRASH_COOLDOWN_MS", 3_000),
+  /** Signs player session tokens. */
+  sessionSecret: required("SESSION_SECRET", "development-session-secret"),
+  /** Dev-only endpoints: instant login and a free-ETB faucet. Never in production. */
+  devTools: !production && env.DEV_TOOLS !== "false",
+};

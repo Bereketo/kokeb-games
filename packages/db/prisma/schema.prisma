@@ -237,4 +237,72 @@ model LedgerEntry {
 }
 
 // ───────────────────────────── games schema ─────────────────────────────
-// Game engine tables (crash rounds, bingo rooms) arrive with the engines.
+// Owned by the game server. No foreign keys into `platform`: a player is just
+// an opaque id here, exactly as the game sees them.
+
+enum CrashRoundStatus {
+  BETTING
+  FLYING
+  CRASHED
+  VOID
+
+  @@schema("games")
+}
+
+enum CrashBetStatus {
+  PENDING
+  PLACED
+  CASHED_OUT
+  LOST
+  CANCELLED
+  REJECTED
+
+  @@schema("games")
+}
+
+/// One round of the crash game. `chain` + `number` locate its provably-fair hash.
+model CrashRound {
+  id               String           @id @db.Uuid
+  /// The published commitment of the hash chain this round came from.
+  chain            String
+  number           Int
+  hash             String
+  /// Hundredths: 235 = 2.35x.
+  crashPoint       Int              @map("crash_point")
+  status           CrashRoundStatus
+  bettingStartedAt DateTime         @map("betting_started_at")
+  flyingStartedAt  DateTime?        @map("flying_started_at")
+  crashedAt        DateTime?        @map("crashed_at")
+
+  bets CrashBet[]
+
+  @@unique([chain, number])
+  @@map("crash_rounds")
+  @@schema("games")
+}
+
+model CrashBet {
+  id                String         @id @db.Uuid
+  roundId           String         @map("round_id") @db.Uuid
+  playerId          String         @map("player_id") @db.Uuid
+  label             String
+  slot              Int
+  /// "ETB" or "DEMO"
+  currency          String
+  amount            BigInt
+  autoCashout       Int?           @map("auto_cashout")
+  status            CrashBetStatus
+  cashoutMultiplier Int?           @map("cashout_multiplier")
+  payout            BigInt?
+  settled           Boolean        @default(false)
+  createdAt         DateTime       @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  round CrashRound @relation(fields: [roundId], references: [id])
+
+  @@unique([roundId, playerId, slot])
+  @@index([settled])
+  @@index([playerId, createdAt])
+  @@map("crash_bets")
+  @@schema("games")
+}

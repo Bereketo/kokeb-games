@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Kokeb Crash</title>
+<style>
+  :root {
+    --bg: #0b1020; --panel: #131a2e; --panel-2: #1a2340; --line: #26314f;
+    --text: #e8ecf6; --muted: #8b95b2; --gold: #f5c542; --gold-2: #ffdf7e;
+    --green: #2fd17a; --green-d: #1f9d5b; --red: #ff5a6a; --blue: #6aa8ff;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; }
+  input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; width: 100%; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 12px 16px 24px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 18px; margin-right: auto; }
+  .brand .star { color: var(--gold); font-size: 22px; }
+  .pill { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; }
+  .balance { font-weight: 700; color: var(--gold-2); }
+  .mode { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+  .mode button { background: transparent; color: var(--muted); padding: 5px 12px; border-radius: 999px; }
+  .mode button.on { background: var(--panel-2); color: var(--text); }
+  .ghost { background: var(--panel-2); color: var(--text); padding: 7px 12px; }
+  .history { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 10px; scrollbar-width: none; }
+  .history span { flex: none; font-weight: 600; font-size: 13px; padding: 3px 9px; border-radius: 999px; background: var(--panel); cursor: pointer; }
+  .m-low { color: var(--blue); } .m-mid { color: #b78bff; } .m-high { color: var(--gold); }
+  .grid { display: grid; grid-template-columns: 290px 1fr; gap: 12px; }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } .bets-col { order: 2; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .stage { position: relative; height: 340px; overflow: hidden; }
+  @media (max-width: 820px) { .stage { height: 260px; } }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; text-align: center; }
+  .mult { font-size: 64px; font-weight: 800; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+  @media (max-width: 820px) { .mult { font-size: 48px; } }
+  .mult.crashed { color: var(--red); }
+  .sub { color: var(--muted); margin-top: 4px; }
+  .progress { width: 220px; height: 6px; background: var(--panel-2); border-radius: 99px; overflow: hidden; margin-top: 10px; }
+  .progress i { display: block; height: 100%; background: var(--gold); width: 0; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 560px) { .panels { grid-template-columns: 1fr; } }
+  .panel { padding: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 8px 0; }
+  .chips button { background: var(--panel-2); color: var(--muted); padding: 6px 0; font-size: 13px; }
+  .stepper { display: flex; align-items: center; gap: 6px; }
+  .stepper button { width: 34px; height: 34px; background: var(--panel-2); color: var(--text); font-size: 18px; flex: none; }
+  .stepper input { text-align: center; font-weight: 700; font-size: 17px; }
+  .auto { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .auto input[type=checkbox] { width: auto; }
+  .auto input[type=text] { width: 80px; padding: 5px 8px; }
+  .action { width: 100%; padding: 14px 8px; font-weight: 800; font-size: 17px; margin-top: 8px; color: #fff; background: var(--green-d); }
+  .action small { display: block; font-weight: 600; font-size: 13px; opacity: .9; }
+  .action.cancel { background: #a33b4a; }
+  .action.cash { background: var(--gold); color: #1b1400; }
+  .action:disabled { opacity: .5; cursor: default; }
+  .bets-col { padding: 10px; display: flex; flex-direction: column; min-height: 200px; }
+  .bets-col h3 { margin: 2px 4px 8px; font-size: 14px; color: var(--muted); font-weight: 600; display: flex; justify-content: space-between; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  td { padding: 6px 4px; border-top: 1px solid var(--line); }
+  td:not(:first-child) { text-align: right; }
+  tr.won td { color: var(--green); }
+  .bets-scroll { overflow-y: auto; max-height: 520px; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+  .toast.show { opacity: 1; }
+  .toast.err { border-color: var(--red); }
+  .login { max-width: 360px; margin: 12vh auto; padding: 24px; text-align: center; }
+  .login h1 { margin: 0 0 6px; font-size: 22px; }
+  .login p { color: var(--muted); margin: 0 0 16px; }
+  .login button { width: 100%; margin-top: 10px; padding: 12px; background: var(--gold); color: #1b1400; font-weight: 700; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); max-width: 640px; width: calc(100% - 32px); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  code { font-size: 12px; word-break: break-all; color: var(--gold-2); }
+  .ok { color: var(--green); } .bad { color: var(--red); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="loginView" class="card login hidden">
+  <h1><span style="color:var(--gold)">★</span> <span class="game-name">Crash</span></h1>
+  <p>Development login. Pick any name.</p>
+  <input id="loginName" placeholder="Your name" maxlength="32" />
+  <button id="loginBtn">Play</button>
+</div>
+
+<div id="gameView" class="wrap hidden">
+  <header>
+    <div class="brand"><span class="star">★</span><span class="game-name">Crash</span></div>
+    <div class="mode"><button data-cur="DEMO" class="on">Demo</button><button data-cur="ETB">Real</button></div>
+    <div class="pill"><span class="balance" id="balance">0.00</span> <span id="cur">DEMO</span></div>
+    <button class="ghost" id="faucetBtn" title="Development only">+1000 ETB</button>
+    <button class="ghost" id="fairBtn">Fairness</button>
+  </header>
+
+  <div class="history" id="history"></div>
+
+  <div class="grid">
+    <div class="card bets-col">
+      <h3><span>All bets</span><span id="betCount">0</span></h3>
+      <div class="bets-scroll">
+        <table><tbody id="betRows"></tbody></table>
+      </div>
+    </div>
+    <div>
+      <div class="card stage">
+        <canvas id="canvas"></canvas>
+        <div class="center">
+          <div class="mult" id="mult">1.00x</div>
+          <div class="sub" id="sub">Connecting…</div>
+          <div class="progress" id="progress"><i></i></div>
+        </div>
+      </div>
+      <div class="panels" id="panels"></div>
+    </div>
+  </div>
+</div>
+
+<dialog id="fairDialog">
+  <h3 style="margin-top:0">Provably fair</h3>
+  <p class="sub">Every result was fixed before the first round, and you can check any of them.</p>
+  <div id="fairBody">Loading…</div>
+  <p><button class="ghost" onclick="fairDialog.close()">Close</button></p>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<template id="panelTpl">
+  <div class="card panel">
+    <div class="stepper"><button data-step="-1">−</button><input class="amount" value="10.00" inputmode="decimal" /><button data-step="1">+</button></div>
+    <div class="chips"><button>10</button><button>50</button><button>100</button><button>500</button></div>
+    <label class="auto"><input type="checkbox" class="autoOn" /> Auto cash-out at <input type="text" class="autoVal" value="2.00" inputmode="decimal" />x</label>
+    <button class="action"></button>
+  </div>
+</template>
+
+<script>
+(() => {
+  const GROWTH = 0.00006; // must match the server's multiplier curve
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+
+  let cfg = { displayName: "Crash", devTools: false };
+  let tokens = null;
+  let currency = store.get("kokeb.currency") || "DEMO";
+  let ws = null, seq = 0;
+  const pending = new Map();
+  let state = { round: null, bets: [], history: [] };
+  let clockOffset = 0; // serverTime - Date.now()
+  let myBets = [null, null];
+
+  // ── boot ──
+  fetch("/api/config").then((r) => r.json()).then((c) => {
+    cfg = c;
+    document.title = c.displayName;
+    document.querySelectorAll(".game-name").forEach((el) => (el.textContent = c.displayName));
+    if (!c.devTools) $("faucetBtn").classList.add("hidden");
+    const saved = store.get("kokeb.tokens");
+    if (saved) { tokens = JSON.parse(saved); startGame(); }
+    else $("loginView").classList.remove("hidden");
+  });
+
+  $("loginBtn").onclick = async () => {
+    const r = await fetch("/dev/login", { method: "POST", body: JSON.stringify({ name: $("loginName").value }) });
+    if (!r.ok) return toast("Login failed", true);
+    tokens = (await r.json()).tokens;
+    store.set("kokeb.tokens", JSON.stringify(tokens));
+    $("loginView").classList.add("hidden");
+    startGame();
+  };
+  $("loginName").onkeydown = (e) => e.key === "Enter" && $("loginBtn").click();
+
+  function startGame() {
+    $("gameView").classList.remove("hidden");
+    buildPanels();
+    setCurrencyButtons();
+    connect();
+    requestAnimationFrame(frame);
+  }
+
+  // ── connection ──
+  function connect() {
+    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    ws.onopen = () => call({ type: "auth", token: tokens[currency] }).then((r) => {
+      if (!r.ok) { store.set("kokeb.tokens", ""); location.reload(); }
+    });
+    ws.onmessage = (e) => onMessage(JSON.parse(e.data));
+    ws.onclose = () => { $("sub").textContent = "Reconnecting…"; setTimeout(connect, 1000); };
+  }
+  function call(msg) {
+    const id = ++seq;
+    ws.send(JSON.stringify({ ...msg, id }));
+    return new Promise((res) => pending.set(id, res));
+  }
+
+  function onMessage(m) {
+    switch (m.type) {
+      case "reply": { const r = pending.get(m.id); pending.delete(m.id); r && r(m); break; }
+      case "welcome":
+        state = { round: m.state.round, bets: m.state.bets, history: m.state.history };
+        clockOffset = m.state.serverTime - Date.now();
+        if (m.you) {
+          setBalance(m.you.balance);
+          myBets = [null, null];
+          for (const b of m.you.bets) myBets[b.slot] = b;
+        }
+        renderHistory(); renderBets(); renderPanels();
+        break;
+      case "round:betting":
+        state.round = m.round; state.bets = []; myBets = [null, null];
+        renderBets(); renderPanels(); break;
+      case "round:flying":
+        state.round = m.round; clockOffset = m.serverTime - Date.now(); renderPanels(); break;
+      case "round:crashed":
+        state.round = m.round;
+        state.history.unshift({ number: m.round.number, crashPoint: m.round.crashPoint, hash: m.round.hash });
+        state.history = state.history.slice(0, 30);
+        for (const b of myBets) if (b && b.status === "PLACED") b.status = "LOST";
+        renderHistory(); renderPanels(); break;
+      case "tick": clockOffset = m.serverTime - Date.now(); break;
+      case "bet:placed": case "bet:cashed": case "bet:cancelled":
+        if (m.mine) {
+          myBets[m.bet.slot] = m.type === "bet:cancelled" ? null : m.bet;
+          if (m.type === "bet:cashed") toast(`Cashed out at ${(m.bet.cashoutMultiplier / 100).toFixed(2)}x: +${fmt(m.bet.payout)} ${unit()}`);
+          renderPanels();
+        }
+        upsertBet(m.bet, m.type); break;
+      case "balance": if (m.currency === currency) setBalance(m.balance); break;
+    }
+  }
+
+  function upsertBet(b, type) {
+    const i = state.bets.findIndex((x) => x.label === b.label && x.slot === b.slot && x.currency === b.currency);
+    if (type === "bet:cancelled") { if (i >= 0) state.bets.splice(i, 1); }
+    else if (i >= 0) state.bets[i] = b; else state.bets.unshift(b);
+    renderBets();
+  }
+
+  // ── currency ──
+  document.querySelectorAll(".mode button").forEach((btn) => (btn.onclick = () => {
+    if (btn.dataset.cur === currency) return;
+    currency = btn.dataset.cur; store.set("kokeb.currency", currency);
+    setCurrencyButtons(); ws.close();
+  }));
+  function setCurrencyButtons() {
+    document.querySelectorAll(".mode button").forEach((b) => b.classList.toggle("on", b.dataset.cur === currency));
+    $("cur").textContent = currency === "DEMO" ? "DEMO" : "ETB";
+  }
+  function setBalance(v) { $("balance").textContent = Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 }); }
+
+  $("faucetBtn").onclick = async () => {
+    const r = await fetch("/dev/faucet", { method: "POST", body: JSON.stringify({ token: tokens.ETB }) });
+    const j = await r.json();
+    if (!r.ok) return toast(j.error || "Faucet failed", true);
+    toast(`Added 1000 ETB. Real balance: ${j.balance} ETB`);
+    if (currency === "ETB") setBalance(j.balance);
+  };
+
+  // ── bet panels ──
+  function buildPanels() {
+    const host = $("panels");
+    for (let slot = 0; slot < 2; slot++) {
+      const el = $("panelTpl").content.firstElementChild.cloneNode(true);
+      el.dataset.slot = slot;
+      const amount = el.querySelector(".amount");
+      el.querySelectorAll("[data-step]").forEach((b) => (b.onclick = () => {
+        amount.value = Math.max(1, (parseFloat(amount.value) || 0) + Number(b.dataset.step)).toFixed(2);
+      }));
+      el.querySelectorAll(".chips button").forEach((b) => (b.onclick = () => (amount.value = Number(b.textContent).toFixed(2))));
+      el.querySelector(".action").onclick = () => act(slot, el);
+      host.appendChild(el);
+    }
+    renderPanels();
+  }
+
+  async function act(slot, el) {
+    const mine = myBets[slot];
+    const btn = el.querySelector(".action");
+    btn.disabled = true;
+    let r;
+    if (mine && mine.status === "PLACED" && state.round?.status === "FLYING") r = await call({ type: "cashout", slot });
+    else if (mine && mine.status === "PLACED") r = await call({ type: "cancel", slot });
+    else {
+      const autoOn = el.querySelector(".autoOn").checked;
+      r = await call({
+        type: "bet", slot,
+        amount: el.querySelector(".amount").value,
+        autoCashout: autoOn ? el.querySelector(".autoVal").value : null,
+      });
+    }
+    btn.disabled = false;
+    if (!r.ok) toast(r.message || r.code, true);
+    else if (r.bet) {
+      myBets[slot] = r.bet;
+    } else myBets[slot] = null;
+    renderPanels();
+  }
+
+  function renderPanels() {
+    document.querySelectorAll("#panels .panel").forEach((el) => {
+      const slot = Number(el.dataset.slot);
+      const mine = myBets[slot];
+      const btn = el.querySelector(".action");
+      const phase = state.round?.status;
+      btn.className = "action";
+      if (mine && mine.status === "PLACED" && phase === "FLYING") {
+        btn.classList.add("cash");
+        btn.innerHTML = `Cash out<small class="live" data-amount="${mine.amount}">${fmt(mine.amount)}</small>`;
+      } else if (mine && mine.status === "PLACED") {
+        btn.classList.add("cancel");
+        btn.innerHTML = `Cancel<small>${fmt(mine.amount)} ${unit()}</small>`;
+      } else if (mine && mine.status === "CASHED_OUT" && phase !== "BETTING") {
+        btn.disabled = true;
+        btn.innerHTML = `Won ${fmt(mine.payout)}<small>at ${(mine.cashoutMultiplier / 100).toFixed(2)}x</small>`;
+        return;
+      } else {
+        const amt = parseFloat(el.querySelector(".amount").value) || 0;
+        btn.innerHTML = phase === "BETTING" ? `Bet<small>${amt.toFixed(2)} ${unit()}</small>` : `Wait for next round<small>${amt.toFixed(2)} ${unit()}</small>`;
+        btn.disabled = phase !== "BETTING";
+        return;
+      }
+      btn.disabled = false;
+    });
+  }
+
+  // ── lists ──
+  function renderHistory() {
+    $("history").innerHTML = state.history.map((h) =>
+      `<span class="${cls(h.crashPoint)}" data-n="${h.number}">${(h.crashPoint / 100).toFixed(2)}x</span>`).join("");
+  }
+  function renderBets() {
+    $("betCount").textContent = state.bets.length;
+    $("betRows").innerHTML = state.bets.map((b) => `
+      <tr class="${b.status === "CASHED_OUT" ? "won" : ""}">
+        <td>${esc(b.label)}${b.currency === "DEMO" ? ' <span style="color:var(--muted)">demo</span>' : ""}</td>
+        <td>${fmt(b.amount)}</td>
+        <td>${b.cashoutMultiplier ? (b.cashoutMultiplier / 100).toFixed(2) + "x" : ""}</td>
+        <td>${b.payout && b.status === "CASHED_OUT" ? fmt(b.payout) : ""}</td>
+      </tr>`).join("");
+  }
+
+  // ── animation ──
+  const canvas = $("canvas"), ctx = canvas.getContext("2d");
+  function frame() {
+    const r = state.round;
+    const now = Date.now() + clockOffset;
+    const multEl = $("mult"), sub = $("sub"), prog = $("progress");
+    let m = 100;
+    if (r?.status === "BETTING") {
+      const left = Math.max(0, r.bettingEndsAt - now);
+      multEl.textContent = (left / 1000).toFixed(1) + "s";
+      multEl.classList.remove("crashed");
+      sub.textContent = "Place your bets";
+      prog.classList.remove("hidden");
+      prog.firstElementChild.style.width = `${Math.min(100, (left / 6000) * 100)}%`;
+    } else if (r?.status === "FLYING") {
+      m = Math.max(100, Math.floor(100 * Math.exp(GROWTH * (now - r.flyingStartedAt))));
+      multEl.textContent = (m / 100).toFixed(2) + "x";
+      multEl.classList.remove("crashed");
+      sub.textContent = "";
+      prog.classList.add("hidden");
+      document.querySelectorAll(".live").forEach((el) => (el.textContent = fmt((BigInt(el.dataset.amount) * BigInt(m)) / 100n)));
+    } else if (r?.status === "CRASHED") {
+      m = r.crashPoint;
+      multEl.textContent = (m / 100).toFixed(2) + "x";
+      multEl.classList.add("crashed");
+      sub.textContent = "Flew away";
+      prog.classList.add("hidden");
+    }
+    draw(r, now, m);
+    requestAnimationFrame(frame);
+  }
+
+  function draw(r, now, m) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (!r || r.status === "BETTING" || !r.flyingStartedAt) return;
+    const elapsed = r.status === "FLYING" ? now - r.flyingStartedAt : Math.log(m / 100) / GROWTH;
+    const tMax = Math.max(8000, elapsed * 1.15), mMax = Math.max(2, (m / 100) * 1.25);
+    const X = (t) => 20 + (t / tMax) * (w - 50);
+    const Y = (mult) => h - 20 - ((mult - 1) / (mMax - 1)) * (h - 50);
+    const crashed = r.status === "CRASHED";
+    ctx.beginPath();
+    ctx.moveTo(X(0), Y(1));
+    for (let t = 0; t <= elapsed; t += Math.max(16, elapsed / 200)) ctx.lineTo(X(t), Y(Math.exp(GROWTH * t)));
+    const ex = X(elapsed), ey = Y(m / 100);
+    ctx.lineTo(ex, ey);
+    ctx.strokeStyle = crashed ? "#ff5a6a" : "#f5c542";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.lineTo(ex, Y(1)); ctx.lineTo(X(0), Y(1)); ctx.closePath();
+    const grad = ctx.createLinearGradient(0, ey, 0, Y(1));
+    grad.addColorStop(0, crashed ? "rgba(255,90,106,.28)" : "rgba(245,197,66,.30)");
+    grad.addColorStop(1, "rgba(245,197,66,0)");
+    ctx.fillStyle = grad;
+    ctx.fill();
+    if (!crashed) {
+      ctx.font = "28px system-ui";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ffdf7e";
+      ctx.fillText("★", ex, ey - 4);
+    }
+  }
+
+  // ── fairness ──
+  $("fairBtn").onclick = async () => {
+    fairDialog.showModal();
+    const f = await (await fetch("/api/fairness")).json();
+    const rows = await Promise.all(f.recent.slice(0, 10).map(async (r, i, arr) => {
+      const crash = await crashPoint(r.hash, f.salt, f.houseEdgeBps);
+      const prev = arr[i + 1];
+      const link = prev && prev.number === r.number - 1 ? (await sha256hex(hexToBytes(r.hash))) === prev.hash : null;
+      const okCrash = crash === r.crashPoint;
+      return `<tr><td>#${r.number}</td><td>${(r.crashPoint / 100).toFixed(2)}x</td>
+        <td class="${okCrash ? "ok" : "bad"}">${okCrash ? "✓ result" : "✗ result"}</td>
+        <td class="${link === false ? "bad" : "ok"}">${link === null ? "" : link ? "✓ chain" : "✗ chain"}</td></tr>`;
+    }));
+    $("fairBody").innerHTML = `
+      <p>Commitment (published before round 1):<br><code>${f.commitment}</code></p>
+      <p>Salt: <code>${esc(f.salt)}</code> · House edge: ${(f.houseEdgeBps / 100).toFixed(2)}%</p>
+      <ul class="sub">${f.algorithm.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
+      <p>Last rounds, re-checked in your browser:</p>
+      <table><tbody>${rows.join("")}</tbody></table>`;
+  };
+
+  async function sha256hex(bytes) {
+    return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  function hexToBytes(hex) { return new Uint8Array(hex.match(/../g).map((x) => parseInt(x, 16))); }
+  async function crashPoint(hash, salt, bps) {
+    const key = await crypto.subtle.importKey("raw", hexToBytes(hash), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(salt)));
+    const hex = [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const r = BigInt("0x" + hex.slice(0, 13)), E = 2n ** 52n;
+    const v = (BigInt(10000 - bps) * E) / (100n * (E - r));
+    return Math.max(100, Number(v));
+  }
+
+  // ── helpers ──
+  function fmt(minor) { const v = BigInt(minor); return `${v / 100n}.${(v % 100n).toString().padStart(2, "0")}`; }
+  function unit() { return currency === "DEMO" ? "DEMO" : "ETB"; }
+  function cls(m) { return m < 200 ? "m-low" : m < 1000 ? "m-mid" : "m-high"; }
+  function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
+  let toastTimer;
+  function toast(text, err) {
+    const t = $("toast"); t.textContent = text; t.classList.toggle("err", !!err); t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+  }
+  setInterval(renderPanels, 500);
+})();
+</script>
+</body>
+</html>
