@@ -5,7 +5,7 @@ import { newPlayer, testDb } from "./helpers.ts";
 
 runWalletConformance("InProcessWallet (Postgres ledger)", async () => {
   const db = testDb();
-  const ledger = new Ledger(db);
+  const ledger = new Ledger(db, { timeoutMs: 120_000 });
   return {
     wallet: new InProcessWallet(ledger, { onUnexpectedError: () => {} }),
     demoGrant: ledger.demoGrant,

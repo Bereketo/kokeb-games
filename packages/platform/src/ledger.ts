@@ -73,15 +73,17 @@ export class Ledger {
     return this.inTx(async (tx) => {
       const acct = await this.lockPlayerAccount(tx, req.playerId, req.currency);
 
-      const existing = await findTx(tx, source, req.playerId, req.txId);
+      const rows = await related(tx, source, req.playerId, [
+        { externalTxId: req.txId },
+        { type: "ROLLBACK", originalExternalTxId: req.txId },
+      ]);
+      const existing = rows.find((r) => r.externalTxId === req.txId);
       if (existing) {
         if (existing.type === "BET" && sameGameTx(existing, req)) return dup(req, existing, acct.balance);
         throw new WalletError("TX_CONFLICT", `txId ${req.txId} was already used with a different payload`);
       }
 
-      const tombstone = await tx.ledgerTransaction.findFirst({
-        where: { source, playerId: req.playerId, type: "ROLLBACK", originalExternalTxId: req.txId },
-      });
+      const tombstone = rows.find((r) => r.type === "ROLLBACK" && r.originalExternalTxId === req.txId);
       if (tombstone) throw new WalletError("TX_ALREADY_ROLLED_BACK", `debit ${req.txId} was already rolled back`);
 
       if (acct.status !== "ACTIVE") throw new WalletError("PLAYER_BLOCKED");
@@ -109,23 +111,19 @@ export class Ledger {
     return this.inTx(async (tx) => {
       const acct = await this.lockPlayerAccount(tx, req.playerId, req.currency);
 
-      const existing = await findTx(tx, source, req.playerId, req.txId);
+      const rows = await related(tx, source, req.playerId, [
+        { externalTxId: req.txId },
+        { type: "BET", roundId: req.roundId, currency: req.currency, rolledBack: false },
+      ]);
+      const existing = rows.find((r) => r.externalTxId === req.txId);
       if (existing) {
         if (existing.type === "WIN" && sameGameTx(existing, req)) return dup(req, existing, acct.balance);
         throw new WalletError("TX_CONFLICT", `txId ${req.txId} was already used with a different payload`);
       }
 
-      const liveBet = await tx.ledgerTransaction.findFirst({
-        where: {
-          source,
-          playerId: req.playerId,
-          roundId: req.roundId,
-          currency: req.currency,
-          type: "BET",
-          rolledBack: false,
-        },
-        select: { id: true },
-      });
+      const liveBet = rows.find(
+        (r) => r.type === "BET" && r.roundId === req.roundId && r.currency === req.currency && !r.rolledBack,
+      );
       if (!liveBet) throw new WalletError("ROUND_NOT_FOUND", `no live debit for round ${req.roundId}`);
 
       // Wins are always paid, even to a player blocked mid-round.
@@ -151,7 +149,11 @@ export class Ledger {
     return this.inTx(async (tx) => {
       const acct = await this.lockPlayerAccount(tx, req.playerId, req.currency);
 
-      const existing = await findTx(tx, source, req.playerId, req.txId);
+      const rows = await related(tx, source, req.playerId, [
+        { externalTxId: { in: [req.txId, req.originalTxId] } },
+        { type: "ROLLBACK", originalExternalTxId: req.originalTxId },
+      ]);
+      const existing = rows.find((r) => r.externalTxId === req.txId);
       if (existing) {
         if (existing.type === "ROLLBACK" && existing.originalExternalTxId === req.originalTxId) {
           return dup(req, existing, acct.balance);
@@ -159,10 +161,8 @@ export class Ledger {
         throw new WalletError("TX_CONFLICT", `txId ${req.txId} was already used with a different payload`);
       }
 
-      const original = await findTx(tx, source, req.playerId, req.originalTxId);
-      const priorRollback = await tx.ledgerTransaction.findFirst({
-        where: { source, playerId: req.playerId, type: "ROLLBACK", originalExternalTxId: req.originalTxId },
-      });
+      const original = rows.find((r) => r.externalTxId === req.originalTxId);
+      const priorRollback = rows.find((r) => r.type === "ROLLBACK" && r.originalExternalTxId === req.originalTxId);
 
       if (original) {
         if (original.type !== "BET") {
@@ -191,20 +191,17 @@ export class Ledger {
       if (priorRollback) return dup(req, priorRollback, acct.balance);
 
       // Unknown debit: record a zero-amount tombstone so the debit is refused if it shows up later.
-      const tombstone = await tx.ledgerTransaction.create({
-        data: {
-          type: "ROLLBACK",
-          currency: req.currency,
-          source,
-          playerId: req.playerId,
-          externalTxId: req.txId,
-          gameId: req.gameId,
-          roundId: req.roundId,
-          amount: 0n,
-          originalExternalTxId: req.originalTxId,
-        },
+      const { ledgerTx } = await this.post(tx, {
+        type: "ROLLBACK",
+        source,
+        req,
+        amount: 0n,
+        originalExternalTxId: req.originalTxId,
+        player: acct,
+        playerDelta: 0n,
+        counterAccountId: acct.id,
       });
-      return result(req, tombstone.id, acct.balance, false);
+      return result(req, ledgerTx.id, acct.balance, false);
     });
   }
 
@@ -341,7 +338,11 @@ export class Ledger {
     return acct.id;
   }
 
-  /** Record one balanced transaction: player account <-> counter account. */
+  /**
+   * Record one balanced transaction (player account <-> counter account) in a
+   * single round trip: insert the transaction, move the player's balance and
+   * write both entries. With a zero delta only the transaction row is written.
+   */
   private async post(
     tx: Tx,
     p: {
@@ -354,35 +355,28 @@ export class Ledger {
       playerDelta: bigint;
       counterAccountId: string;
     },
-  ): Promise<{ ledgerTx: LedgerTransaction; balance: bigint }> {
-    const ledgerTx = await tx.ledgerTransaction.create({
-      data: {
-        type: p.type,
-        currency: p.req.currency,
-        source: p.source,
-        playerId: p.req.playerId,
-        externalTxId: p.req.txId,
-        gameId: p.req.gameId,
-        roundId: p.req.roundId,
-        amount: p.amount,
-        originalExternalTxId: p.originalExternalTxId ?? null,
-      },
-    });
-
-    if (p.playerDelta === 0n) return { ledgerTx, balance: p.player.balance };
-
-    const updated = await tx.$queryRaw<{ balance: bigint }[]>`
-      UPDATE platform.accounts SET balance = balance + ${p.playerDelta}
-      WHERE id = ${p.player.id}::uuid RETURNING balance`;
-    const balance = updated[0]!.balance;
-
-    await tx.ledgerEntry.createMany({
-      data: [
-        { transactionId: ledgerTx.id, accountId: p.player.id, amount: p.playerDelta, balanceAfter: balance },
-        { transactionId: ledgerTx.id, accountId: p.counterAccountId, amount: -p.playerDelta },
-      ],
-    });
-    return { ledgerTx, balance };
+  ): Promise<{ ledgerTx: { id: string }; balance: bigint }> {
+    const rows = await tx.$queryRaw<{ id: string; balance: bigint | null }[]>`
+      WITH t AS (
+        INSERT INTO platform.ledger_transactions
+          (id, type, currency, source, player_id, external_tx_id, game_id, round_id, amount, original_external_tx_id)
+        VALUES (gen_random_uuid(), ${p.type}::platform."LedgerTxType", ${p.req.currency}::platform."Currency",
+                ${p.source}, ${p.req.playerId}::uuid, ${p.req.txId}, ${p.req.gameId}, ${p.req.roundId},
+                ${p.amount}, ${p.originalExternalTxId ?? null})
+        RETURNING id
+      ), a AS (
+        UPDATE platform.accounts SET balance = balance + ${p.playerDelta}::bigint
+        WHERE id = ${p.player.id}::uuid AND ${p.playerDelta}::bigint <> 0
+        RETURNING balance
+      ), e AS (
+        INSERT INTO platform.ledger_entries (transaction_id, account_id, amount, balance_after)
+        SELECT t.id, ${p.player.id}::uuid, ${p.playerDelta}::bigint, a.balance FROM t, a
+        UNION ALL
+        SELECT t.id, ${p.counterAccountId}::uuid, ${-p.playerDelta}::bigint, NULL FROM t, a
+      )
+      SELECT t.id, (SELECT balance FROM a) AS balance FROM t`;
+    const row = rows[0]!;
+    return { ledgerTx: { id: row.id }, balance: row.balance ?? p.player.balance };
   }
 }
 
@@ -399,6 +393,11 @@ function validateTx(req: { txId: string; gameId: string; roundId: string; curren
   validateId("gameId", req.gameId);
   validateId("roundId", req.roundId);
   if (req.currency !== "ETB" && req.currency !== "DEMO") throw new WalletError("INVALID_REQUEST", "unknown currency");
+}
+
+/** Fetch every transaction of this (source, player) matching any condition, in one query. */
+function related(tx: Tx, source: string, playerId: string, or: Prisma.LedgerTransactionWhereInput[]) {
+  return tx.ledgerTransaction.findMany({ where: { source, playerId, OR: or } });
 }
 
 function findTx(tx: Tx, source: string, playerId: string, externalTxId: string) {

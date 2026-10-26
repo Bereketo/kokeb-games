@@ -10,6 +10,5 @@ export default defineConfig({
   migrations: { path: "prisma/migrations" },
   // Not using prisma's env() helper on purpose: it throws when DATABASE_URL is
   // missing, which breaks `prisma generate` (run on install) before .env exists.
-  // Commands that need a database (migrate, studio) still fail clearly without it.
   datasource: { url: process.env.DATABASE_URL ?? "" },
 });

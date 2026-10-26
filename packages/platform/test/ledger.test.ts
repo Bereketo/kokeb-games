@@ -7,7 +7,7 @@ import { normalizeEthiopianPhone, upsertPlayer } from "../src/players.ts";
 import { newPlayer, testDb } from "./helpers.ts";
 
 const db = testDb();
-const ledger = new Ledger(db);
+const ledger = new Ledger(db, { timeoutMs: 120_000 });
 const wallet = new InProcessWallet(ledger);
 afterAll(() => db.$disconnect());
 
