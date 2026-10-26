@@ -23,7 +23,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Db } from "@kokeb/db";
 import { GameError, type CrashEngine, type CrashEvent } from "@kokeb/games";
-import { upsertPlayer, type Ledger } from "@kokeb/platform";
+import { loginWithTelegram, TelegramAuthError, upsertPlayer, type Ledger } from "@kokeb/platform";
 import { formatMinor, parseMajor, type WalletPort } from "@kokeb/wallet-contract";
 import type { config as Config } from "./config.ts";
 import { maskLabel, signSession, verifySession, type Session } from "./session.ts";
@@ -206,7 +206,7 @@ async function handleHttp(deps: Deps, req: IncomingMessage, res: ServerResponse)
   }
 
   if (req.method === "GET" && url.pathname === "/api/config") {
-    return json(res, 200, { displayName: config.displayName, devTools: config.devTools });
+    return json(res, 200, { displayName: config.displayName, devTools: config.devTools, telegramLogin: Boolean(config.telegramBotToken) });
   }
 
   if (req.method === "GET" && url.pathname === "/api/fairness") {
@@ -223,6 +223,23 @@ async function handleHttp(deps: Deps, req: IncomingMessage, res: ServerResponse)
       ],
       recent: snap.history,
     });
+  }
+
+  // Mini App login: Telegram's signed initData in, session tokens out.
+  if (req.method === "POST" && url.pathname === "/auth/telegram") {
+    if (!config.telegramBotToken) return json(res, 503, { error: "Telegram login is not configured (TELEGRAM_BOT_TOKEN)" });
+    const body = await readJson(req);
+    try {
+      const r = await loginWithTelegram(deps.db, String(body.initData ?? ""), {
+        botToken: config.telegramBotToken,
+        sessionSecret: config.sessionSecret,
+        ttlMs: SESSION_TTL_MS,
+      });
+      return json(res, 200, { label: r.label, firstName: r.firstName, hasPhone: r.hasPhone, tokens: r.tokens });
+    } catch (err) {
+      if (err instanceof TelegramAuthError) return json(res, 401, { error: err.message });
+      throw err;
+    }
   }
 
   if (config.devTools && req.method === "POST" && url.pathname === "/dev/login") {
@@ -262,7 +279,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   let raw = "";
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 4096) throw new Error("body too large");
+    if (raw.length > 16_384) throw new Error("body too large");
   }
   try {
     return raw ? JSON.parse(raw) : {};

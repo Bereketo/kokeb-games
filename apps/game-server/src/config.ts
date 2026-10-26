@@ -37,6 +37,8 @@ export const config = {
   cooldownMs: int("CRASH_COOLDOWN_MS", 3_000),
   /** Signs player session tokens. */
   sessionSecret: required("SESSION_SECRET", "development-session-secret"),
+  /** Bot token from @BotFather; needed to verify Mini App logins. */
+  telegramBotToken: env.TELEGRAM_BOT_TOKEN || "",
   /** Dev-only endpoints: instant login and a free-ETB faucet. Never in production. */
   devTools: !production && env.DEV_TOOLS !== "false",
 };

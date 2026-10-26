@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { createDb } from "@kokeb/db";
 import { CrashEngine, HashChain, crashPointFromHash } from "@kokeb/games";
-import { InProcessWallet, Ledger } from "@kokeb/platform";
+import { InProcessWallet, Ledger, signInitDataForTesting } from "@kokeb/platform";
 import { PrismaCrashStore } from "../src/prisma-store.ts";
 import { startServer } from "../src/server.ts";
 
@@ -44,7 +44,7 @@ beforeAll(async () => {
     db,
     config: {
       production: false, port: PORT, displayName: "Test", chainSecret: secret, chainLength: 500, salt: SALT,
-      houseEdgeBps: 300, bettingMs: 8_000, cooldownMs: 300, sessionSecret: "e2e-session", devTools: true,
+      houseEdgeBps: 300, bettingMs: 8_000, cooldownMs: 300, sessionSecret: "e2e-session", devTools: true, telegramBotToken: "123456:TEST-bot-token",
     },
   });
 });
@@ -143,6 +143,23 @@ describe("game server end to end", () => {
     expect(await ledger.verifyIntegrity()).toEqual([]);
     console.log(played.join("\n"));
     c.ws.close();
+  });
+
+  it("logs a player in from Telegram Mini App data and refuses forged data", async () => {
+    const tgId = 7_000_000_000 + Math.floor(Math.random() * 1e6);
+    const initData = signInitDataForTesting("123456:TEST-bot-token", { user: { id: tgId, first_name: "Hana", username: `hana${tgId}` } });
+    const ok = await post("/auth/telegram", { initData });
+    expect(ok.tokens.DEMO).toBeTruthy();
+    expect(ok.tokens.ETB).toBeNull(); // no phone shared yet
+    expect(ok.hasPhone).toBe(false);
+
+    const c = await connect();
+    expect((await c.call({ type: "auth", token: ok.tokens.DEMO })).ok).toBe(true);
+    c.ws.close();
+
+    const forged = signInitDataForTesting("999:someone-elses-bot", { user: { id: tgId, first_name: "Hana" } });
+    const res = await fetch(`${base}/auth/telegram`, { method: "POST", body: JSON.stringify({ initData: forged }) });
+    expect(res.status).toBe(401);
   });
 
   it("publishes the fairness data a player needs to verify rounds", async () => {

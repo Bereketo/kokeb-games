@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 <title>Kokeb Crash</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
     --bg: #0b1020; --panel: #131a2e; --panel-2: #1a2340; --line: #26314f;
@@ -84,9 +85,12 @@
 <body>
 <div id="loginView" class="card login hidden">
   <h1><span style="color:var(--gold)">★</span> <span class="game-name">Crash</span></h1>
-  <p>Development login. Pick any name.</p>
-  <input id="loginName" placeholder="Your name" maxlength="32" />
-  <button id="loginBtn">Play</button>
+  <div id="devLogin" class="hidden">
+    <p>Development login. Pick any name.</p>
+    <input id="loginName" placeholder="Your name" maxlength="32" />
+    <button id="loginBtn">Play</button>
+  </div>
+  <p id="loginMsg" class="hidden"></p>
 </div>
 
 <div id="gameView" class="wrap hidden">
@@ -158,15 +162,52 @@
   let myBets = [null, null];
 
   // ── boot ──
-  fetch("/api/config").then((r) => r.json()).then((c) => {
+  // Inside Telegram, the SDK gives us signed initData; outside it's empty.
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const inTelegram = Boolean(tg && tg.initData);
+  const haptic = (kind) => { try { if (!inTelegram) return; kind === "light" ? tg.HapticFeedback.impactOccurred("light") : tg.HapticFeedback.notificationOccurred(kind); } catch {} };
+
+  fetch("/api/config").then((r) => r.json()).then(async (c) => {
     cfg = c;
     document.title = c.displayName;
     document.querySelectorAll(".game-name").forEach((el) => (el.textContent = c.displayName));
     if (!c.devTools) $("faucetBtn").classList.add("hidden");
-    const saved = store.get("kokeb.tokens");
-    if (saved) { tokens = JSON.parse(saved); startGame(); }
-    else $("loginView").classList.remove("hidden");
+
+    if (inTelegram) {
+      tg.ready();
+      tg.expand();
+      try { tg.setHeaderColor("#0b1020"); tg.setBackgroundColor("#0b1020"); } catch {}
+      if (await telegramLogin()) startGame();
+      return;
+    }
+    const saved = c.devTools && store.get("kokeb.tokens");
+    if (saved) { tokens = JSON.parse(saved); startGame(); return; }
+    $("loginView").classList.remove("hidden");
+    if (c.devTools) $("devLogin").classList.remove("hidden");
+    else showLoginMessage("Open this game from our Telegram bot.");
   });
+
+  function showLoginMessage(text) {
+    $("loginView").classList.remove("hidden");
+    $("gameView").classList.add("hidden");
+    $("loginMsg").textContent = text;
+    $("loginMsg").classList.remove("hidden");
+  }
+
+  /** Exchange Telegram's signed initData for game session tokens. */
+  async function telegramLogin() {
+    try {
+      const r = await fetch("/auth/telegram", { method: "POST", body: JSON.stringify({ initData: tg.initData }) });
+      const j = await r.json();
+      if (!r.ok) { showLoginMessage(j.error ? `Couldn't sign you in: ${j.error}. Close and reopen the game from the bot.` : "Couldn't sign you in."); return false; }
+      tokens = j.tokens;
+      if (!tokens.ETB && currency === "ETB") currency = "DEMO";
+      return true;
+    } catch {
+      showLoginMessage("Connection problem. Close and reopen the game from the bot.");
+      return false;
+    }
+  }
 
   $("loginBtn").onclick = async () => {
     const r = await fetch("/dev/login", { method: "POST", body: JSON.stringify({ name: $("loginName").value }) });
@@ -191,8 +232,10 @@
   // ── connection ──
   function connect() {
     ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-    ws.onopen = () => call({ type: "auth", token: tokens[currency] }).then((r) => {
-      if (!r.ok) { store.set("kokeb.tokens", ""); location.reload(); }
+    ws.onopen = () => call({ type: "auth", token: tokens[currency] }).then(async (r) => {
+      if (r.ok) return;
+      if (inTelegram) { if (await telegramLogin()) ws.close(); return; } // reconnects with fresh tokens
+      store.set("kokeb.tokens", ""); location.reload();
     });
     ws.onmessage = (e) => onMessage(JSON.parse(e.data));
     ws.onclose = () => { $("sub").textContent = "Reconnecting…"; setTimeout(connect, 1000); };
@@ -225,13 +268,14 @@
         state.round = m.round;
         state.history.unshift({ number: m.round.number, crashPoint: m.round.crashPoint, hash: m.round.hash });
         state.history = state.history.slice(0, 30);
-        for (const b of myBets) if (b && b.status === "PLACED") b.status = "LOST";
+        for (const b of myBets) if (b && b.status === "PLACED") { b.status = "LOST"; haptic("error"); }
         renderHistory(); renderPanels(); break;
       case "tick": clockOffset = m.serverTime - Date.now(); break;
       case "bet:placed": case "bet:cashed": case "bet:cancelled":
         if (m.mine) {
           myBets[m.bet.slot] = m.type === "bet:cancelled" ? null : m.bet;
-          if (m.type === "bet:cashed") toast(`Cashed out at ${(m.bet.cashoutMultiplier / 100).toFixed(2)}x: +${fmt(m.bet.payout)} ${unit()}`);
+          if (m.type === "bet:cashed") { haptic("success"); toast(`Cashed out at ${(m.bet.cashoutMultiplier / 100).toFixed(2)}x: +${fmt(m.bet.payout)} ${unit()}`); }
+          if (m.type === "bet:placed") haptic("light");
           renderPanels();
         }
         upsertBet(m.bet, m.type); break;
@@ -249,6 +293,9 @@
   // ── currency ──
   document.querySelectorAll(".mode button").forEach((btn) => (btn.onclick = () => {
     if (btn.dataset.cur === currency) return;
+    if (btn.dataset.cur === "ETB" && !tokens.ETB) {
+      return toast("To play with real money, share your phone number in the bot (/start).", true);
+    }
     currency = btn.dataset.cur; store.set("kokeb.currency", currency);
     setCurrencyButtons(); ws.close();
   }));
@@ -259,6 +306,7 @@
   function setBalance(v) { $("balance").textContent = Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 }); }
 
   $("faucetBtn").onclick = async () => {
+    if (!tokens.ETB) return toast("Verify your phone in the bot first.", true);
     const r = await fetch("/dev/faucet", { method: "POST", body: JSON.stringify({ token: tokens.ETB }) });
     const j = await r.json();
     if (!r.ok) return toast(j.error || "Faucet failed", true);
