@@ -6,7 +6,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm db:generate && pnpm -r typecheck",
     "test": "pnpm -r test",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check": "pnpm check:boundaries && pnpm typecheck && pnpm test",
