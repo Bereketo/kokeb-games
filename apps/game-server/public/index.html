@@ -55,6 +55,8 @@
   .auto input[type=text] { width: 80px; padding: 5px 8px; }
   .action { width: 100%; padding: 14px 8px; font-weight: 800; font-size: 17px; margin-top: 8px; color: #fff; background: var(--green-d); }
   .action small { display: block; font-weight: 600; font-size: 13px; opacity: .9; }
+  .action * { pointer-events: none; }
+  .action { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   .action.cancel { background: #a33b4a; }
   .action.cash { background: var(--gold); color: #1b1400; }
   .action:disabled { opacity: .5; cursor: default; }
@@ -174,7 +176,9 @@
     $("loginView").classList.add("hidden");
     startGame();
   };
-  $("loginName").onkeydown = (e) => e.key === "Enter" && $("loginBtn").click();
+  $("loginName").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("loginBtn").click();
+  });
 
   function startGame() {
     $("gameView").classList.remove("hidden");
@@ -271,8 +275,10 @@
       const amount = el.querySelector(".amount");
       el.querySelectorAll("[data-step]").forEach((b) => (b.onclick = () => {
         amount.value = Math.max(1, (parseFloat(amount.value) || 0) + Number(b.dataset.step)).toFixed(2);
+        renderPanels();
       }));
-      el.querySelectorAll(".chips button").forEach((b) => (b.onclick = () => (amount.value = Number(b.textContent).toFixed(2))));
+      el.querySelectorAll(".chips button").forEach((b) => (b.onclick = () => { amount.value = Number(b.textContent).toFixed(2); renderPanels(); }));
+      amount.addEventListener("input", renderPanels);
       el.querySelector(".action").onclick = () => act(slot, el);
       host.appendChild(el);
     }
@@ -282,7 +288,9 @@
   async function act(slot, el) {
     const mine = myBets[slot];
     const btn = el.querySelector(".action");
-    btn.disabled = true;
+    if (btn.dataset.busy === "1") return;
+    btn.dataset.busy = "1";
+    renderPanels();
     let r;
     if (mine && mine.status === "PLACED" && state.round?.status === "FLYING") r = await call({ type: "cashout", slot });
     else if (mine && mine.status === "PLACED") r = await call({ type: "cancel", slot });
@@ -294,7 +302,7 @@
         autoCashout: autoOn ? el.querySelector(".autoVal").value : null,
       });
     }
-    btn.disabled = false;
+    btn.dataset.busy = "0";
     if (!r.ok) toast(r.message || r.code, true);
     else if (r.bet) {
       myBets[slot] = r.bet;
@@ -306,26 +314,30 @@
     document.querySelectorAll("#panels .panel").forEach((el) => {
       const slot = Number(el.dataset.slot);
       const mine = myBets[slot];
-      const btn = el.querySelector(".action");
       const phase = state.round?.status;
-      btn.className = "action";
+      let cls = "action", html, disabled = false;
       if (mine && mine.status === "PLACED" && phase === "FLYING") {
-        btn.classList.add("cash");
-        btn.innerHTML = `Cash out<small class="live" data-amount="${mine.amount}">${fmt(mine.amount)}</small>`;
+        cls += " cash";
+        html = `Cash out<small class="live" data-amount="${mine.amount}">${fmt(mine.amount)}</small>`;
       } else if (mine && mine.status === "PLACED") {
-        btn.classList.add("cancel");
-        btn.innerHTML = `Cancel<small>${fmt(mine.amount)} ${unit()}</small>`;
+        cls += " cancel";
+        html = `Cancel<small>${fmt(mine.amount)} ${unit()}</small>`;
       } else if (mine && mine.status === "CASHED_OUT" && phase !== "BETTING") {
-        btn.disabled = true;
-        btn.innerHTML = `Won ${fmt(mine.payout)}<small>at ${(mine.cashoutMultiplier / 100).toFixed(2)}x</small>`;
-        return;
+        html = `Won ${fmt(mine.payout)}<small>at ${(mine.cashoutMultiplier / 100).toFixed(2)}x</small>`;
+        disabled = true;
       } else {
         const amt = parseFloat(el.querySelector(".amount").value) || 0;
-        btn.innerHTML = phase === "BETTING" ? `Bet<small>${amt.toFixed(2)} ${unit()}</small>` : `Wait for next round<small>${amt.toFixed(2)} ${unit()}</small>`;
-        btn.disabled = phase !== "BETTING";
-        return;
+        html = phase === "BETTING" ? `Bet<small>${amt.toFixed(2)} ${unit()}</small>` : `Wait for next round<small>${amt.toFixed(2)} ${unit()}</small>`;
+        disabled = phase !== "BETTING";
       }
-      btn.disabled = false;
+      const btn = el.querySelector(".action");
+      if (btn.dataset.busy === "1") disabled = true; // a request is in flight
+      // Rewriting a button while it's being pressed swallows the click, so only
+      // write when something visible changed. (The live cash-out amount is
+      // updated separately, inside a child that ignores taps.)
+      const key = cls + "|" + html.replace(/<small class="live"[^>]*>[^<]*<\/small>/, "LIVE");
+      if (btn.dataset.key !== key) { btn.className = cls; btn.innerHTML = html; btn.dataset.key = key; }
+      if (btn.disabled !== disabled) btn.disabled = disabled;
     });
   }
 
