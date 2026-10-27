@@ -45,6 +45,7 @@ beforeAll(async () => {
     config: {
       production: false, port: PORT, displayName: "Test", chainSecret: secret, chainLength: 500, salt: SALT,
       houseEdgeBps: 300, bettingMs: 8_000, cooldownMs: 300, sessionSecret: "e2e-session", devTools: true, telegramBotToken: "123456:TEST-bot-token",
+      bingoDisplayName: "Bingo", bingoDeckSeed: "e2e-deck", bingoCommissionBps: 2_000, bingoCountdownMs: 30_000, bingoDrawIntervalMs: 3_000,
     },
   });
 });

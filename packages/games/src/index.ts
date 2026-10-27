@@ -13,3 +13,11 @@ export { CrashEngine, type CrashEngineDeps, type PlaceBetInput } from "./crash/e
 export { SettlementQueue, betTxIds } from "./crash/settlement.ts";
 export { MemoryCrashStore } from "./crash/memory-store.ts";
 export * from "./crash/types.ts";
+
+// 75-ball bingo
+export { BingoEngine, type BingoEngineDeps } from "./bingo/engine.ts";
+export { MemoryBingoStore } from "./bingo/memory-store.ts";
+export { BALLS, FREE, LETTERS, PATTERNS, buildDeck, drawOrder, firstWinningCall, letterFor, seedHash, winningPattern, type Card } from "./bingo/cards.ts";
+export * from "./bingo/types.ts";
+export { SeededRng } from "./common/rng.ts";
+export { RetryQueue } from "./common/retry-queue.ts";

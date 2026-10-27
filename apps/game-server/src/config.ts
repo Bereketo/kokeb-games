@@ -35,6 +35,14 @@ export const config = {
   houseEdgeBps: int("CRASH_HOUSE_EDGE_BPS", 300),
   bettingMs: int("CRASH_BETTING_MS", 6_000),
   cooldownMs: int("CRASH_COOLDOWN_MS", 3_000),
+  /** Name players see for bingo. */
+  bingoDisplayName: env.BINGO_DISPLAY_NAME || "75-Ball Bingo",
+  /** Public seed that fixes every cartela's numbers. Never change it once players know their cards. */
+  bingoDeckSeed: env.BINGO_DECK_SEED || "kokeb-bingo-deck-v1",
+  /** House cut of each bingo pot in basis points (2000 = 20%). */
+  bingoCommissionBps: int("BINGO_COMMISSION_BPS", 2_000),
+  bingoCountdownMs: int("BINGO_COUNTDOWN_MS", 30_000),
+  bingoDrawIntervalMs: int("BINGO_DRAW_INTERVAL_MS", 3_000),
   /** Signs player session tokens. */
   sessionSecret: required("SESSION_SECRET", "development-session-secret"),
   /** Bot token from @BotFather; needed to verify Mini App logins. */

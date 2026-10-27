@@ -22,14 +22,17 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Db } from "@kokeb/db";
-import { GameError, type CrashEngine, type CrashEvent } from "@kokeb/games";
+import { GameError, type BingoEngine, type CrashEngine, type CrashEvent } from "@kokeb/games";
 import { loginWithTelegram, TelegramAuthError, upsertPlayer, type Ledger } from "@kokeb/platform";
 import { formatMinor, parseMajor, type WalletPort } from "@kokeb/wallet-contract";
 import type { config as Config } from "./config.ts";
+import { attachBingo } from "./bingo-socket.ts";
 import { maskLabel, signSession, verifySession, type Session } from "./session.ts";
 
 interface Deps {
   engine: CrashEngine;
+  /** 75-ball bingo; optional so the crash game can run alone. */
+  bingo?: BingoEngine;
   wallet: WalletPort;
   ledger: Ledger;
   db: Db;
@@ -46,6 +49,7 @@ interface Client {
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const INDEX_HTML = new URL("../public/index.html", import.meta.url);
+const BINGO_HTML = new URL("../public/bingo.html", import.meta.url);
 
 export function startServer(deps: Deps) {
   const { engine, config } = deps;
@@ -58,7 +62,15 @@ export function startServer(deps: Deps) {
     });
   });
 
-  const wss = new WebSocketServer({ server: http, path: "/ws", maxPayload: 4 * 1024 });
+  // Two WebSocket endpoints on one HTTP server: route upgrades by path.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 });
+  const bingo = deps.bingo ? attachBingo({ engine: deps.bingo, wallet: deps.wallet, config }) : null;
+  http.on("upgrade", (req, socket, head) => {
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (path === "/ws") wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+    else if (path === "/ws/bingo" && bingo) bingo.wss.handleUpgrade(req, socket, head, (ws) => bingo.wss.emit("connection", ws, req));
+    else socket.destroy();
+  });
 
   wss.on("connection", (ws) => {
     const client: Client = { ws, session: null, tokens: 20, last: Date.now() };
@@ -123,6 +135,7 @@ export function startServer(deps: Deps) {
       // WebSocket connection to end on its own, which can be never.
       for (const c of clients) c.ws.terminate();
       wss.close();
+      bingo?.close();
       const closed = new Promise<void>((r) => http.close(() => r()));
       http.closeAllConnections();
       await closed;
@@ -203,6 +216,22 @@ async function handleHttp(deps: Deps, req: IncomingMessage, res: ServerResponse)
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     return res.end(await readFile(INDEX_HTML));
+  }
+
+  if (req.method === "GET" && (url.pathname === "/bingo" || url.pathname === "/bingo.html") && deps.bingo) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    return res.end(await readFile(BINGO_HTML));
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/bingo/config" && deps.bingo) {
+    return json(res, 200, {
+      displayName: config.bingoDisplayName,
+      devTools: config.devTools,
+      telegramLogin: Boolean(config.telegramBotToken),
+      ...deps.bingo.publicConfig(),
+      // Every cartela's numbers: card #N is deck[N-1], 25 numbers row by row, 0 = free space.
+      deck: deps.bingo.deck,
+    });
   }
 
   if (req.method === "GET" && url.pathname === "/api/config") {

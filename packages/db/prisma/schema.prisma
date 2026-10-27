@@ -306,3 +306,80 @@ model CrashBet {
   @@map("crash_bets")
   @@schema("games")
 }
+
+// ── 75-ball bingo ──
+
+enum BingoGameStatus {
+  LOBBY
+  COUNTDOWN
+  DRAWING
+  FINISHED
+  VOID
+
+  @@schema("games")
+}
+
+enum BingoCardStatus {
+  PENDING
+  HELD
+  WON
+  LOST
+  ELIMINATED
+  CANCELLED
+  REJECTED
+
+  @@schema("games")
+}
+
+/// One bingo game in a room. `seed` stays secret until the game ends; `seedHash` is public from the start.
+model BingoGame {
+  id              String          @id @db.Uuid
+  roomId          String          @map("room_id")
+  seed            String
+  seedHash        String          @map("seed_hash")
+  status          BingoGameStatus
+  createdAt       DateTime        @map("created_at")
+  countdownEndsAt DateTime?       @map("countdown_ends_at")
+  startedAt       DateTime?       @map("started_at")
+  finishedAt      DateTime?       @map("finished_at")
+  /// Balls of the draw order called so far.
+  calls           Int             @default(0)
+  pot             BigInt          @default(0)
+  commission      BigInt          @default(0)
+  prize           BigInt          @default(0)
+  /// [{ cardNumber, playerId, label, pattern, cells, payout (string), auto }]
+  winners         Json            @default("[]")
+
+  cards BingoCard[]
+
+  @@index([status])
+  @@index([roomId, createdAt])
+  @@map("bingo_games")
+  @@schema("games")
+}
+
+/// A cartela a player bought for one game.
+model BingoCard {
+  id         String          @id @db.Uuid
+  gameId     String          @map("game_id") @db.Uuid
+  roomId     String          @map("room_id")
+  playerId   String          @map("player_id") @db.Uuid
+  label      String
+  cardNumber Int             @map("card_number")
+  /// "ETB" or "DEMO"
+  currency   String
+  stake      BigInt
+  status     BingoCardStatus
+  payout     BigInt?
+  settled    Boolean         @default(false)
+  createdAt  DateTime        @map("created_at")
+  updatedAt  DateTime        @updatedAt @map("updated_at")
+
+  game BingoGame @relation(fields: [gameId], references: [id])
+
+  @@index([gameId])
+  @@index([settled])
+  @@index([playerId, createdAt])
+  @@map("bingo_cards")
+  @@schema("games")
+}

@@ -5,9 +5,10 @@
  * Run a single instance. Two instances would run two round loops.
  */
 import { createDb } from "@kokeb/db";
-import { CrashEngine, HashChain } from "@kokeb/games";
+import { BingoEngine, CrashEngine, HashChain } from "@kokeb/games";
 import { InProcessWallet, Ledger } from "@kokeb/platform";
 import { config } from "./config.ts";
+import { PrismaBingoStore } from "./bingo-store.ts";
 import { PrismaCrashStore } from "./prisma-store.ts";
 import { startServer } from "./server.ts";
 
@@ -33,9 +34,25 @@ const engine = new CrashEngine({
   },
 });
 
+const bingo = new BingoEngine({
+  wallet,
+  store: new PrismaBingoStore(db),
+  config: {
+    deckSeed: config.bingoDeckSeed,
+    commissionBps: config.bingoCommissionBps,
+    countdownMs: config.bingoCountdownMs,
+    drawIntervalMs: config.bingoDrawIntervalMs,
+  },
+});
+
 await engine.start();
-const loop = setInterval(() => engine.step(), 50);
-const server = startServer({ engine, wallet, ledger, db, config });
+await bingo.start();
+// One loop drives both games. Run a single instance of this server.
+const loop = setInterval(() => {
+  engine.step();
+  bingo.step();
+}, 50);
+const server = startServer({ engine, bingo, wallet, ledger, db, config });
 if (config.devTools) console.log("[game-server] dev tools ON: open the page and log in with any name");
 
 let stopping = false;
@@ -51,6 +68,7 @@ async function shutdown(signal: string) {
   clearInterval(loop);
   await server.close();
   await engine.stop();
+  await bingo.stop();
   await db.$disconnect();
   console.log("[game-server] stopped cleanly");
   process.exit(0);
