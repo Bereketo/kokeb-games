@@ -2,7 +2,7 @@
 
 **Kokeb** (ኮከብ, "star") is a real-money gaming platform for Ethiopian players, delivered as a Telegram bot and Mini App. Players deposit birr, play games like our **crash game** and **Bingo**, and withdraw their winnings.
 
-> **Status:** early development. The wallet contract and ledger are built and tested; everything else is still to come.
+> **Status:** early development. Built and tested: wallet and ledger, the crash game, the Telegram bot (registration with phone sharing) and Mini App login. Next: deposits and withdrawals with Chapa, the lobby, and the admin page.
 
 ---
 
@@ -72,12 +72,32 @@ Every implementation must pass the shared **conformance suite** (`@kokeb/wallet-
 - The database itself enforces the critical rules: player balances can't go negative (CHECK constraint), and ledger entries are append-only (trigger).
 - `verifyIntegrity()` checks that the books balance. Run it nightly.
 
+## The crash game
+
+Code in `packages/games/src/crash`, server in `apps/game-server`.
+
+- **Round cycle:** betting (6 s) → the multiplier climbs → crash → 3 s pause → next round.
+- **Provably fair:** results come from a SHA-256 hash chain whose final hash (the commitment) is published before round 1, plus a public salt. After each round its hash is revealed; anyone can check it links to the previous round and recompute the crash point. The test page's **Fairness** button does this in the browser.
+- **House edge:** 3% by default (`CRASH_HOUSE_EDGE_BPS`). Whatever cash-out target a player picks, they get back 97% on average; tested over 200,000 simulated rounds.
+- **Cash-outs are judged by the server clock** against the exact crash moment, so a slow tick or slow network can't turn a loss into a win or the reverse.
+- **Money only moves through the wallet.** Wins are retried until the wallet accepts them, and paid once. If the server restarts mid-round, that round is voided, open stakes are refunded, and wins already earned are still paid.
+- The name players see comes from `GAME_DISPLAY_NAME`.
+
+**Play it locally:**
+
+```bash
+pnpm db:deploy     # creates the game tables
+pnpm dev:game      # then open http://localhost:4001 and log in with any name
+```
+
+Use **Demo** for play money, or switch to **Real** and press **+1000 ETB** (development only) to test with ETB.
+
 ## Components
 
 **Platform**
-1. Telegram bot: entry point, phone sharing, menus, notifications
+1. Telegram bot: entry point, phone sharing, menus, notifications (registration and Play ✅; notifications next)
 2. Mini App shell: lobby, wallet, history, profile, limits
-3. Auth: validates Telegram `initData`, creates and identifies users
+3. Auth: validates Telegram `initData`, creates and identifies users ✅
 4. Wallet / ledger: double-entry accounts, the four wallet operations ✅
 5. Payments: Chapa / Telebirr deposits, webhooks, withdrawals
 6. Game catalog & sessions: our games and provider games, launch in real or demo mode
@@ -87,10 +107,10 @@ Every implementation must pass the shared **conformance suite** (`@kokeb/wallet-
 **Games**
 
 9. Wallet contract + conformance suite ✅
-10. Provably fair: hash chain for crash, seed commit/reveal for bingo, public verifier
-11. Crash engine: round loop, bets, cashouts
+10. Provably fair: hash chain for crash, seed commit/reveal for bingo, public verifier (crash ✅)
+11. Crash engine: round loop, bets, cashouts ✅
 12. Bingo engine: rooms, tickets, draws, winners, prize splits
-13. Realtime gateway: WebSocket ticks, draws and balance updates
+13. Realtime gateway: WebSocket ticks, draws and balance updates (crash ✅)
 14. Game UIs
 
 **Shared**
@@ -114,20 +134,21 @@ All TypeScript on Node.js 22+.
 
 ```
 apps/
+  bot/               # Telegram bot (grammY): /start, phone sharing, Play button
   web/               # Next.js: Mini App, admin, API, webhooks, bot          (next)
-  game-server/       # Node: WebSockets, crash loop, bingo rooms, jobs       (next)
+  game-server/       # Node: crash round loop, WebSockets, browser test page
 packages/
   wallet-contract/   # WalletPort interface, errors, signing, OpenAPI, conformance suite
   db/                # Prisma schema, migrations, client
   platform/          # ledger, InProcessWallet, players (later: payments, auth, risk)
-  games/             # game engines + provably-fair (never imports platform or db)
+  games/             # crash engine, hash chain, settlement (never imports platform or db)
 scripts/
   check-boundaries.mjs  # fails if games import the platform
 ```
 
 ## Architecture rules
 
-- `packages/games` **never imports** `@kokeb/platform` or `@kokeb/db`, and `apps/game-server` never imports the platform. Enforced by `pnpm check:boundaries` in CI.
+- `packages/games` **never imports** `@kokeb/platform` or `@kokeb/db`: engines get a `WalletPort` and a store passed in. Enforced by `pnpm check:boundaries` in CI. (`apps/game-server` is where an engine is wired to a wallet and a store, so it may import them.)
 - No cross-schema queries and no shared DB transactions between platform and games. They interact only through the wallet contract.
 - The game loop runs in **exactly one process**. Web instances can scale; the game engine does not run on each of them.
 - Game outcomes come **only** from the provably-fair module. No tunable per-round odds.
@@ -137,15 +158,24 @@ scripts/
 
 ## Getting started
 
-Requirements: Node 22+, pnpm 10 (`corepack enable`), PostgreSQL 16+ (on macOS: [Postgres.app](https://postgresapp.com) or `brew install postgresql@16`).
+Requirements: Node 22+, pnpm 10 (`corepack enable`), and a PostgreSQL 16+ database. We use **[Neon](https://neon.tech)**; a plain local Postgres also works.
+
+**Neon setup**
+
+1. Create a project in a region close to your app server (e.g. Frankfurt, `aws-eu-central-1`).
+2. Create a **`dev` branch** and use it for development and tests. Never point tests at the production branch: they write real ledger rows, and ledger history can't be deleted.
+3. Copy the branch's **direct** connection string (host without `-pooler`) into `.env` as `DATABASE_URL`. It's the only setting.
 
 ```bash
 cp .env.example .env         # then set DATABASE_URL
 pnpm install                 # also generates the Prisma client
-createdb kokeb
 pnpm db:deploy               # apply migrations
 pnpm check                   # boundaries + typecheck + tests
 ```
+
+For a local Postgres instead, point `DATABASE_URL` at it and run `createdb kokeb` before `pnpm db:deploy`.
+
+**Before production on Neon:** turn off scale-to-zero (autosuspend) on the production compute. A suspended database adds a cold start to the first bet after a quiet period, which players notice in a crash game.
 
 Useful scripts:
 
@@ -167,8 +197,8 @@ The game server needs a long-running process, so this cannot be hosted on server
 ## Roadmap
 
 1. ✅ **Wallet contract + ledger:** contract, OpenAPI spec, double-entry ledger, idempotent operations, conformance tests
-2. **Crash game server:** hash chain, round loop, WebSocket protocol, demo mode
-3. **Platform MVP:** bot with phone sharing, Mini App lobby, Chapa deposits, manual withdrawals, admin panel
+2. ✅ **Crash game:** provably-fair hash chain, crash engine (two bet slots, auto cash-out, max payout), settlement retries, restart recovery, game server, browser test page, demo mode
+3. **Platform MVP:** ✅ bot with phone sharing, ✅ Mini App login; next: lobby, Chapa deposits, manual withdrawals, admin panel
 4. **Bingo:** reuses the session and wallet integration to prove plug-and-play
 5. **Provider games:** `HttpWallet` endpoints with signing, first third-party integration
 6. **Hardening:** load testing, reconciliation jobs, monitoring, public fairness verifier
