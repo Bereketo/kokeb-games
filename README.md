@@ -2,7 +2,7 @@
 
 **Kokeb** (ኮከብ, "star") is a real-money gaming platform for Ethiopian players, delivered as a Telegram bot and Mini App. Players deposit birr, play games like our **crash game** and **Bingo**, and withdraw their winnings.
 
-> **Status:** early development. Built and tested: wallet and ledger, the crash game, the Telegram bot (registration with phone sharing) and Mini App login. Next: deposits and withdrawals with Chapa, the lobby, and the admin page.
+> **Status:** early development. Built and tested: wallet and ledger, the crash game, 75-ball bingo, the Telegram bot (registration with phone sharing) and Mini App login. Next: deposits and withdrawals with Chapa, the lobby, and the admin page.
 
 ---
 
@@ -92,6 +92,20 @@ pnpm dev:game      # then open http://localhost:4001 and log in with any name
 
 Use **Demo** for play money, or switch to **Real** and press **+1000 ETB** (development only) to test with ETB.
 
+## 75-ball bingo
+
+Code in `packages/games/src/bingo`, served by the game server at `/bingo`. It follows the format Ethiopian Telegram bingo bots use:
+
+- **Cartelas:** 5×5 cards (B 1–15, I 16–30, N 31–45, G 46–60, O 61–75, free center). Players **pick a numbered cartela** from 1–100. Card #N is always the same card, fixed by `BINGO_DECK_SEED`. A picked number is locked for everyone else. Up to 2 cartelas per player per game.
+- **Rooms:** Practice (free, demo money), 10, 20, 50 and 100 Birr.
+- **Prize:** cartelas sold × price, minus a 20% house cut (`BINGO_COMMISSION_BPS`), fixed when the draw starts.
+- **Start:** a 30-second countdown once 2 different players hold cartelas. Cartelas can be returned for a refund until the draw starts.
+- **Draw:** one ball every 3 seconds.
+- **Winning:** any row, column, diagonal, or the four corners. Players **tap BINGO**. A false BINGO knocks that cartela out for the game. After the first valid BINGO there's a 5-second window; everyone with a valid claim in it shares the prize (leftover santim to the first claimer). A winning cartela nobody claims is claimed automatically after 3 more balls.
+- **No winner possible** (every cartela knocked out): all stakes refunded, no house cut.
+- **Provably fair:** each game's draw order comes from a secret seed whose SHA-256 is shown from the moment the game opens. The seed is revealed at the end, and **Verify this draw** recomputes the balls in the browser.
+- **Restarts:** a game interrupted by a restart is voided and every cartela refunded.
+
 ## Components
 
 **Platform**
@@ -109,7 +123,7 @@ Use **Demo** for play money, or switch to **Real** and press **+1000 ETB** (deve
 9. Wallet contract + conformance suite ✅
 10. Provably fair: hash chain for crash, seed commit/reveal for bingo, public verifier (crash ✅)
 11. Crash engine: round loop, bets, cashouts ✅
-12. Bingo engine: rooms, tickets, draws, winners, prize splits
+12. Bingo engine: rooms, tickets, draws, winners, prize splits ✅
 13. Realtime gateway: WebSocket ticks, draws and balance updates (crash ✅)
 14. Game UIs
 
@@ -199,7 +213,7 @@ The game server needs a long-running process, so this cannot be hosted on server
 1. ✅ **Wallet contract + ledger:** contract, OpenAPI spec, double-entry ledger, idempotent operations, conformance tests
 2. ✅ **Crash game:** provably-fair hash chain, crash engine (two bet slots, auto cash-out, max payout), settlement retries, restart recovery, game server, browser test page, demo mode
 3. **Platform MVP:** ✅ bot with phone sharing, ✅ Mini App login; next: lobby, Chapa deposits, manual withdrawals, admin panel
-4. **Bingo:** reuses the session and wallet integration to prove plug-and-play
+4. ✅ **75-ball bingo:** Ethiopian-style cartelas and rooms, same wallet and sessions as the crash game
 5. **Provider games:** `HttpWallet` endpoints with signing, first third-party integration
 6. **Hardening:** load testing, reconciliation jobs, monitoring, public fairness verifier
 
