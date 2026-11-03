@@ -13,10 +13,10 @@
     "db:generate": "pnpm --filter @kokeb/db generate",
     "db:migrate": "pnpm --filter @kokeb/db migrate:dev",
     "db:deploy": "pnpm --filter @kokeb/db migrate:deploy",
-    "dev:game": "pnpm --filter @kokeb/game-server dev",
-    "start:game": "pnpm --filter @kokeb/game-server start",
-    "dev:bot": "pnpm --filter @kokeb/bot dev",
-    "start:bot": "pnpm --filter @kokeb/bot start"
+    "dev:game": "pnpm db:generate && pnpm --filter @kokeb/game-server dev",
+    "start:game": "pnpm db:generate && pnpm --filter @kokeb/game-server start",
+    "dev:bot": "pnpm db:generate && pnpm --filter @kokeb/bot dev",
+    "start:bot": "pnpm db:generate && pnpm --filter @kokeb/bot start"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
