@@ -1,6 +1,14 @@
 # apps/game-server
 
-The long-running game process. It wires the crash engine (`@kokeb/games`) to the in-process wallet (`@kokeb/platform`) and the Postgres store, runs **exactly one** round loop, and serves players over WebSockets.
+The long-running game process. It runs three games on one round loop and serves players over WebSockets:
+
+| Game | Page | WebSocket |
+|---|---|---|
+| Crash (classic) | `/` | `/ws` |
+| Jet crash: own rounds and chain, 3 bet panels, jet theme | `/jet` | `/ws/jet` |
+| 75-ball bingo | `/bingo` | `/ws/bingo` |
+
+The two crash games share the engine, the page and the protocol; the page reads its theme, bet panels and socket from `/api/config?game=jet`. Each has its own provably-fair chain (`CRASH_CHAIN_SECRET` / `JET_CHAIN_SECRET`), so their rounds are independent.
 
 ```bash
 pnpm dev:game        # from the repo root; restarts on file changes
@@ -14,7 +22,9 @@ pnpm dev:game        # from the repo root; restarts on file changes
 | File | Purpose |
 |---|---|
 | `src/main.ts` | Entry point: builds the hash chain, starts the engine, loop and server, graceful shutdown |
-| `src/server.ts` | HTTP routes and the WebSocket protocol |
+| `src/server.ts` | HTTP routes and WebSocket routing |
+| `src/crash-socket.ts` | WebSocket protocol for both crash games |
+| `src/bingo-socket.ts`, `src/bingo-store.ts` | Bingo's WebSocket protocol and storage |
 | `src/prisma-store.ts` | Stores rounds and bets in the `games` schema |
 | `src/session.ts` | Signed player session tokens |
 | `src/config.ts` | Settings from `.env` (see `.env.example`) |

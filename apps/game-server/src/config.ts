@@ -35,6 +35,15 @@ export const config = {
   houseEdgeBps: int("CRASH_HOUSE_EDGE_BPS", 300),
   bettingMs: int("CRASH_BETTING_MS", 6_000),
   cooldownMs: int("CRASH_COOLDOWN_MS", 3_000),
+  /** Name players see for the jet crash game. */
+  jetDisplayName: env.JET_DISPLAY_NAME || "Jet",
+  /** The jet game has its OWN hash chain and salt (separate rounds from the classic crash game). */
+  jetChainSecret: required("JET_CHAIN_SECRET", "development-only-jet-chain-secret-do-not-use"),
+  jetChainLength: int("JET_CHAIN_LENGTH", 1_000_000),
+  jetSalt: required("JET_SALT", "development-jet-salt"),
+  jetHouseEdgeBps: int("JET_HOUSE_EDGE_BPS", 300),
+  jetBettingMs: int("JET_BETTING_MS", 5_000),
+  jetSlots: int("JET_SLOTS", 3),
   /** Name players see for bingo. */
   bingoDisplayName: env.BINGO_DISPLAY_NAME || "75-Ball Bingo",
   /** Public seed that fixes every cartela's numbers. Never change it once players know their cards. */

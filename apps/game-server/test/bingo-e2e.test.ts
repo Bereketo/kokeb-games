@@ -55,6 +55,7 @@ beforeAll(async () => {
     config: {
       production: false, port: PORT, displayName: "Crash", chainSecret: "x".repeat(32), chainLength: 50, salt: "x",
       houseEdgeBps: 300, bettingMs: 6_000, cooldownMs: 3_000, sessionSecret: "bingo-e2e", devTools: true, telegramBotToken: "",
+      jetDisplayName: "Jet", jetChainSecret: "j".repeat(32), jetChainLength: 50, jetSalt: "js", jetHouseEdgeBps: 300, jetBettingMs: 5_000, jetSlots: 3,
       bingoDisplayName: "75-Ball Bingo", bingoDeckSeed: "e2e-deck", bingoCommissionBps: 2_000, bingoCountdownMs: 8_000, bingoDrawIntervalMs: 300,
     },
   });

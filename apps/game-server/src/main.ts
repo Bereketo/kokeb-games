@@ -34,6 +34,23 @@ const engine = new CrashEngine({
   },
 });
 
+const jetChain = HashChain.fromSecret(config.jetChainSecret, config.jetChainLength);
+console.log(`[game-server] jet chain commitment: ${jetChain.commitment}`);
+const jet = new CrashEngine({
+  wallet,
+  store: new PrismaCrashStore(db, jetChain.commitment),
+  chain: jetChain,
+  config: {
+    gameId: "jet",
+    salt: config.jetSalt,
+    houseEdgeBps: config.jetHouseEdgeBps,
+    bettingMs: config.jetBettingMs,
+    cooldownMs: config.cooldownMs,
+    slots: config.jetSlots,
+  },
+  log: (msg, extra) => console.log(`[jet] ${msg}`, extra ?? ""),
+});
+
 const bingo = new BingoEngine({
   wallet,
   store: new PrismaBingoStore(db),
@@ -46,13 +63,15 @@ const bingo = new BingoEngine({
 });
 
 await engine.start();
+await jet.start();
 await bingo.start();
 // One loop drives both games. Run a single instance of this server.
 const loop = setInterval(() => {
   engine.step();
+  jet.step();
   bingo.step();
 }, 50);
-const server = startServer({ engine, bingo, wallet, ledger, db, config });
+const server = startServer({ engine, jet, bingo, wallet, ledger, db, config });
 if (config.devTools) console.log("[game-server] dev tools ON: open the page and log in with any name");
 
 let stopping = false;
@@ -68,6 +87,7 @@ async function shutdown(signal: string) {
   clearInterval(loop);
   await server.close();
   await engine.stop();
+  await jet.stop();
   await bingo.stop();
   await db.$disconnect();
   console.log("[game-server] stopped cleanly");

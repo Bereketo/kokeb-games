@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Kokeb Crash</title>
+<title>Kokeb Games</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
@@ -33,6 +33,10 @@
   @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } .bets-col { order: 2; } }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
   .stage { position: relative; height: 340px; overflow: hidden; }
+  body.theme-jet .stage { background: radial-gradient(120% 90% at 20% 100%, #13305a 0%, #0c1a38 45%, #070d1f 100%); }
+  body.theme-jet .brand .star { color: #3fd0c9; }
+  .games-nav { display: flex; gap: 6px; }
+  .games-nav a { text-decoration: none; padding: 7px 12px; border-radius: 10px; }
   @media (max-width: 820px) { .stage { height: 260px; } }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; text-align: center; }
@@ -42,7 +46,7 @@
   .sub { color: var(--muted); margin-top: 4px; }
   .progress { width: 220px; height: 6px; background: var(--panel-2); border-radius: 99px; overflow: hidden; margin-top: 10px; }
   .progress i { display: block; height: 100%; background: var(--gold); width: 0; }
-  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 12px; }
   @media (max-width: 560px) { .panels { grid-template-columns: 1fr; } }
   .panel { padding: 12px; }
   .row { display: flex; gap: 8px; align-items: center; }
@@ -100,7 +104,7 @@
     <div class="pill"><span class="balance" id="balance">0.00</span> <span id="cur">DEMO</span></div>
     <button class="ghost" id="faucetBtn" title="Development only">+1000 ETB</button>
     <button class="ghost" id="fairBtn">Fairness</button>
-    <a class="ghost" href="/bingo" style="text-decoration:none;padding:7px 12px;border-radius:10px">Bingo</a>
+    <nav class="games-nav" id="gamesNav"></nav>
   </header>
 
   <div class="history" id="history"></div>
@@ -160,6 +164,9 @@
   const pending = new Map();
   let state = { round: null, bets: [], history: [] };
   let clockOffset = 0; // serverTime - Date.now()
+  // Which crash-style game this page is: "/" is the classic game, "/jet" the jet game.
+  const GAME = location.pathname.startsWith("/jet") ? "jet" : "crash";
+  const emptyBets = () => Array.from({ length: (cfg && cfg.slots) || 2 }, () => null);
   let myBets = [null, null];
 
   // ── boot ──
@@ -168,8 +175,14 @@
   const inTelegram = Boolean(tg && tg.initData);
   const haptic = (kind) => { try { if (!inTelegram) return; kind === "light" ? tg.HapticFeedback.impactOccurred("light") : tg.HapticFeedback.notificationOccurred(kind); } catch {} };
 
-  fetch("/api/config").then((r) => r.json()).then(async (c) => {
+  fetch(`/api/config?game=${GAME}`).then((r) => r.json()).then(async (c) => {
     cfg = c;
+    myBets = emptyBets();
+    document.body.classList.toggle("theme-jet", c.theme === "jet");
+    if (c.theme === "jet") document.querySelectorAll(".brand .star").forEach((el) => (el.textContent = "✈"));
+    $("gamesNav").innerHTML = (c.games || [])
+      .filter((g) => g.path !== (GAME === "jet" ? "/jet" : "/"))
+      .map((g) => `<a class="ghost" href="${g.path}">${esc(g.name)}</a>`).join("");
     document.title = c.displayName;
     document.querySelectorAll(".game-name").forEach((el) => (el.textContent = c.displayName));
     if (!c.devTools) $("faucetBtn").classList.add("hidden");
@@ -232,7 +245,7 @@
 
   // ── connection ──
   function connect() {
-    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${cfg.wsPath || "/ws"}`);
     ws.onopen = () => call({ type: "auth", token: tokens[currency] }).then(async (r) => {
       if (r.ok) return;
       if (inTelegram) { if (await telegramLogin()) ws.close(); return; } // reconnects with fresh tokens
@@ -255,13 +268,13 @@
         clockOffset = m.state.serverTime - Date.now();
         if (m.you) {
           setBalance(m.you.balance);
-          myBets = [null, null];
+          myBets = emptyBets();
           for (const b of m.you.bets) myBets[b.slot] = b;
         }
         renderHistory(); renderBets(); renderPanels();
         break;
       case "round:betting":
-        state.round = m.round; state.bets = []; myBets = [null, null];
+        state.round = m.round; state.bets = []; myBets = emptyBets();
         renderBets(); renderPanels(); break;
       case "round:flying":
         state.round = m.round; clockOffset = m.serverTime - Date.now(); renderPanels(); break;
@@ -318,7 +331,7 @@
   // ── bet panels ──
   function buildPanels() {
     const host = $("panels");
-    for (let slot = 0; slot < 2; slot++) {
+    for (let slot = 0; slot < cfg.slots; slot++) {
       const el = $("panelTpl").content.firstElementChild.cloneNode(true);
       el.dataset.slot = slot;
       const amount = el.querySelector(".amount");
@@ -419,7 +432,7 @@
       multEl.classList.remove("crashed");
       sub.textContent = "Place your bets";
       prog.classList.remove("hidden");
-      prog.firstElementChild.style.width = `${Math.min(100, (left / 6000) * 100)}%`;
+      prog.firstElementChild.style.width = `${Math.min(100, (left / (cfg.bettingMs || 6000)) * 100)}%`;
     } else if (r?.status === "FLYING") {
       m = Math.max(100, Math.floor(100 * Math.exp(GROWTH * (now - r.flyingStartedAt))));
       multEl.textContent = (m / 100).toFixed(2) + "x";
@@ -444,6 +457,7 @@
     if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
+    if (cfg && cfg.theme === "jet") return drawJet(r, now, m, w, h);
     if (!r || r.status === "BETTING" || !r.flyingStartedAt) return;
     const elapsed = r.status === "FLYING" ? now - r.flyingStartedAt : Math.log(m / 100) / GROWTH;
     const tMax = Math.max(8000, elapsed * 1.15), mMax = Math.max(2, (m / 100) * 1.25);
@@ -472,10 +486,84 @@
     }
   }
 
+  // ── jet theme ──
+  // A night sky with drifting stars, a cyan contrail, and an original swept-wing jet.
+  const stars = Array.from({ length: 70 }, () => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.3 + 0.3, s: Math.random() * 0.6 + 0.2 }));
+  function drawJet(r, now, m, w, h) {
+    const flying = r && r.status === "FLYING" && r.flyingStartedAt;
+    const crashed = r && r.status === "CRASHED" && r.flyingStartedAt;
+    const elapsed = flying ? now - r.flyingStartedAt : crashed ? Math.log(m / 100) / GROWTH : 0;
+    // stars stream past faster as the multiplier climbs
+    const speed = flying ? 0.00004 + Math.min(0.0006, (m / 100 - 1) * 0.00008) : 0.00001;
+    ctx.fillStyle = "#cfe3ff";
+    for (const st of stars) {
+      const x = ((st.x - (now * speed * st.s) % 1) + 1) % 1;
+      ctx.globalAlpha = 0.25 + st.s * 0.6;
+      ctx.beginPath(); ctx.arc(x * w, st.y * h, st.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    if (!flying && !crashed) {
+      drawJetShape(w * 0.12, h - 34, -0.05, 1);
+      return;
+    }
+    const tMax = Math.max(8000, elapsed * 1.15), mMax = Math.max(2, (m / 100) * 1.25);
+    const X = (t) => 24 + (t / tMax) * (w - 80);
+    const Y = (mult) => h - 30 - ((mult - 1) / (mMax - 1)) * (h - 80);
+    const ex = X(elapsed), ey = Y(m / 100);
+    // contrail
+    const grad = ctx.createLinearGradient(X(0), 0, ex, 0);
+    grad.addColorStop(0, "rgba(63,208,201,0)");
+    grad.addColorStop(1, crashed ? "rgba(255,122,89,.9)" : "rgba(63,208,201,.95)");
+    ctx.strokeStyle = grad; ctx.lineWidth = 4; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(X(0), Y(1));
+    for (let t = 0; t <= elapsed; t += Math.max(16, elapsed / 200)) ctx.lineTo(X(t), Y(Math.exp(GROWTH * t)));
+    ctx.lineTo(ex, ey); ctx.stroke();
+    // direction of travel, for the jet's nose angle
+    const dt = Math.max(200, elapsed * 0.05);
+    const angle = Math.atan2(Y(Math.exp(GROWTH * elapsed)) - Y(Math.exp(GROWTH * Math.max(0, elapsed - dt))), X(elapsed) - X(Math.max(0, elapsed - dt)));
+    if (crashed) return drawBurst(ex, ey, now);
+    drawJetShape(ex, ey, angle, 1.15);
+  }
+
+  function drawJetShape(x, y, angle, scale) {
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(angle); ctx.scale(scale, scale);
+    // exhaust flame (flickers)
+    const f = 10 + Math.random() * 7;
+    const flame = ctx.createLinearGradient(-22 - f, 0, -16, 0);
+    flame.addColorStop(0, "rgba(255,170,60,0)"); flame.addColorStop(1, "rgba(255,210,120,.95)");
+    ctx.fillStyle = flame;
+    ctx.beginPath(); ctx.moveTo(-16, -3); ctx.lineTo(-22 - f, 0); ctx.lineTo(-16, 3); ctx.closePath(); ctx.fill();
+    // swept wings
+    ctx.fillStyle = "#2aa7a1";
+    ctx.beginPath(); ctx.moveTo(2, -2); ctx.lineTo(-12, -17); ctx.lineTo(-17, -16); ctx.lineTo(-8, -2); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(2, 2); ctx.lineTo(-12, 17); ctx.lineTo(-17, 16); ctx.lineTo(-8, 2); ctx.closePath(); ctx.fill();
+    // tail fins
+    ctx.beginPath(); ctx.moveTo(-12, -2); ctx.lineTo(-19, -8); ctx.lineTo(-21, -7); ctx.lineTo(-17, -2); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-12, 2); ctx.lineTo(-19, 8); ctx.lineTo(-21, 7); ctx.lineTo(-17, 2); ctx.closePath(); ctx.fill();
+    // fuselage
+    const body = ctx.createLinearGradient(0, -4, 0, 4);
+    body.addColorStop(0, "#f2f7ff"); body.addColorStop(1, "#9fb3cc");
+    ctx.fillStyle = body;
+    ctx.beginPath(); ctx.moveTo(20, 0); ctx.quadraticCurveTo(10, -4.5, -16, -3.5); ctx.lineTo(-16, 3.5); ctx.quadraticCurveTo(10, 4.5, 20, 0); ctx.closePath(); ctx.fill();
+    // canopy
+    ctx.fillStyle = "#3fd0c9";
+    ctx.beginPath(); ctx.ellipse(8, -1.2, 5, 1.8, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBurst(x, y, now) {
+    const t = (now % 600) / 600;
+    for (let i = 3; i >= 1; i--) {
+      ctx.fillStyle = ["", "rgba(255,230,150,.9)", "rgba(255,140,60,.6)", "rgba(255,90,106,.35)"][i];
+      ctx.beginPath(); ctx.arc(x, y, 6 * i + 4 * Math.sin(t * Math.PI * 2 + i), 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
   // ── fairness ──
   $("fairBtn").onclick = async () => {
     fairDialog.showModal();
-    const f = await (await fetch("/api/fairness")).json();
+    const f = await (await fetch(`/api/fairness?game=${GAME}`)).json();
     const rows = await Promise.all(f.recent.slice(0, 10).map(async (r, i, arr) => {
       const crash = await crashPoint(r.hash, f.salt, f.houseEdgeBps);
       const prev = arr[i + 1];

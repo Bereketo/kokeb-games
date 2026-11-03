@@ -72,6 +72,8 @@ export interface CrashConfig {
   maxBet: bigint;
   /** Largest payout one bet can win; the bet is cashed out automatically there. */
   maxPayout: bigint;
+  /** Bet panels per player (0..slots-1). */
+  slots: number;
 }
 
 export const DEFAULT_CRASH_CONFIG: CrashConfig = {
@@ -83,6 +85,7 @@ export const DEFAULT_CRASH_CONFIG: CrashConfig = {
   minBet: 100n, // 1 ETB
   maxBet: 1_000_000n, // 10,000 ETB
   maxPayout: 100_000_000n, // 1,000,000 ETB
+  slots: 2,
 };
 
 /** What the public sees about a bet. */

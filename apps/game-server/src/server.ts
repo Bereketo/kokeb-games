@@ -1,36 +1,30 @@
 /**
- * HTTP + WebSocket front of the game server.
- *
- * WebSocket protocol (JSON messages, path /ws):
- *   client -> server
- *     { type: "auth", token }
- *     { type: "bet", id, slot, amount: "10.50", autoCashout: "2.00" | null }
- *     { type: "cancel", id, slot }
- *     { type: "cashout", id, slot }
- *   server -> client
- *     { type: "welcome", state, you }          on connect and after auth
- *     { type: "tick", multiplier, serverTime } ~10x per second while flying
- *     { type: "reply", id, ok, bet? , code?, message? }
- *     engine events: round:betting, round:flying, round:crashed, bet:placed,
- *     bet:cancelled, bet:cashed, balance (balance only to its owner)
+ * HTTP front of the game server, plus WebSocket routing:
+ *   /ws        classic crash game   (crash-socket.ts)
+ *   /ws/jet    jet crash game       (crash-socket.ts)
+ *   /ws/bingo  75-ball bingo        (bingo-socket.ts)
  *
  * Amounts on the wire are decimal birr strings ("10.50"); multipliers are
- * decimal strings ("2.35"). Internally everything is santim / hundredths.
+ * hundredths (235 = 2.35x). Internally everything is santim / hundredths.
  */
 import { randomUUID, createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { WebSocketServer, type WebSocket } from "ws";
+import type { WebSocketServer } from "ws";
 import type { Db } from "@kokeb/db";
-import { GameError, type BingoEngine, type CrashEngine, type CrashEvent } from "@kokeb/games";
+import type { BingoEngine, CrashEngine } from "@kokeb/games";
 import { loginWithTelegram, TelegramAuthError, upsertPlayer, type Ledger } from "@kokeb/platform";
-import { formatMinor, parseMajor, type WalletPort } from "@kokeb/wallet-contract";
+import { formatMinor, type WalletPort } from "@kokeb/wallet-contract";
 import type { config as Config } from "./config.ts";
 import { attachBingo } from "./bingo-socket.ts";
-import { maskLabel, signSession, verifySession, type Session } from "./session.ts";
+import { attachCrash } from "./crash-socket.ts";
+import { maskLabel, signSession, verifySession } from "./session.ts";
 
 interface Deps {
+  /** The classic crash game. */
   engine: CrashEngine;
+  /** The jet crash game; optional. */
+  jet?: CrashEngine;
   /** 75-ball bingo; optional so the crash game can run alone. */
   bingo?: BingoEngine;
   wallet: WalletPort;
@@ -39,21 +33,12 @@ interface Deps {
   config: typeof Config;
 }
 
-interface Client {
-  ws: WebSocket;
-  session: Session | null;
-  /** simple token bucket */
-  tokens: number;
-  last: number;
-}
-
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const INDEX_HTML = new URL("../public/index.html", import.meta.url);
 const BINGO_HTML = new URL("../public/bingo.html", import.meta.url);
 
 export function startServer(deps: Deps) {
-  const { engine, config } = deps;
-  const clients = new Set<Client>();
+  const { config } = deps;
 
   const http = createServer((req, res) => {
     handleHttp(deps, req, res).catch((err) => {
@@ -62,80 +47,25 @@ export function startServer(deps: Deps) {
     });
   });
 
-  // Two WebSocket endpoints on one HTTP server: route upgrades by path.
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 });
-  const bingo = deps.bingo ? attachBingo({ engine: deps.bingo, wallet: deps.wallet, config }) : null;
+  // Several WebSocket endpoints on one HTTP server: route upgrades by path.
+  const sockets = new Map<string, { wss: WebSocketServer; close(): void }>();
+  sockets.set("/ws", attachCrash({ engine: deps.engine, wallet: deps.wallet, config, displayName: config.displayName }));
+  if (deps.jet) sockets.set("/ws/jet", attachCrash({ engine: deps.jet, wallet: deps.wallet, config, displayName: config.jetDisplayName }));
+  if (deps.bingo) sockets.set("/ws/bingo", attachBingo({ engine: deps.bingo, wallet: deps.wallet, config }));
   http.on("upgrade", (req, socket, head) => {
-    const path = new URL(req.url ?? "/", "http://localhost").pathname;
-    if (path === "/ws") wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
-    else if (path === "/ws/bingo" && bingo) bingo.wss.handleUpgrade(req, socket, head, (ws) => bingo.wss.emit("connection", ws, req));
-    else socket.destroy();
+    const s = sockets.get(new URL(req.url ?? "/", "http://localhost").pathname);
+    if (!s) return socket.destroy();
+    s.wss.handleUpgrade(req, socket, head, (ws) => s.wss.emit("connection", ws, req));
   });
-
-  wss.on("connection", (ws) => {
-    const client: Client = { ws, session: null, tokens: 20, last: Date.now() };
-    clients.add(client);
-    send(ws, { type: "welcome", state: engine.snapshot(), you: null, displayName: config.displayName });
-
-    ws.on("message", (raw) => {
-      if (!allow(client)) return send(ws, { type: "reply", id: null, ok: false, code: "RATE_LIMITED", message: "slow down" });
-      let msg: Record<string, unknown>;
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch {
-        return;
-      }
-      void handleMessage(deps, client, msg);
-    });
-    ws.on("close", () => clients.delete(client));
-    ws.on("error", () => clients.delete(client));
-  });
-
-  // Fan engine events out to connected players.
-  engine.on((event: CrashEvent) => {
-    if (event.type === "balance") {
-      for (const c of clients) {
-        if (c.session?.playerId === event.playerId && c.session.currency === event.currency) {
-          send(c.ws, { type: "balance", currency: event.currency, balance: formatMinor(BigInt(event.balance)) });
-        }
-      }
-      return;
-    }
-    if (event.type === "settlement:failed") return; // internal only
-    if (event.type === "bet:placed" || event.type === "bet:cancelled" || event.type === "bet:cashed") {
-      const { playerId, ...rest } = event;
-      const publicPayload = JSON.stringify(rest);
-      const ownerPayload = JSON.stringify({ ...rest, mine: true });
-      for (const c of clients) {
-        if (c.ws.readyState !== c.ws.OPEN) continue;
-        const owner = c.session?.playerId === playerId && c.session.currency === event.bet.currency;
-        c.ws.send(owner ? ownerPayload : publicPayload);
-      }
-      return;
-    }
-    const payload = JSON.stringify(event);
-    for (const c of clients) if (c.ws.readyState === c.ws.OPEN) c.ws.send(payload);
-  });
-
-  // Live multiplier while flying (clients also animate locally between ticks).
-  const ticker = setInterval(() => {
-    const snap = engine.snapshot();
-    if (snap.round?.status !== "FLYING") return;
-    const payload = JSON.stringify({ type: "tick", multiplier: snap.multiplier, serverTime: snap.serverTime });
-    for (const c of clients) if (c.ws.readyState === c.ws.OPEN) c.ws.send(payload);
-  }, 100);
 
   http.listen(config.port, () => console.log(`[game-server] listening on http://localhost:${config.port}`));
 
   return {
     http,
     async close() {
-      clearInterval(ticker);
       // Cut live sockets: http.close() alone waits for every keep-alive and
       // WebSocket connection to end on its own, which can be never.
-      for (const c of clients) c.ws.terminate();
-      wss.close();
-      bingo?.close();
+      for (const s of sockets.values()) s.close();
       const closed = new Promise<void>((r) => http.close(() => r()));
       http.closeAllConnections();
       await closed;
@@ -143,77 +73,17 @@ export function startServer(deps: Deps) {
   };
 }
 
-// ───────────────────────── WebSocket messages ─────────────────────────
-
-async function handleMessage(deps: Deps, client: Client, msg: Record<string, unknown>) {
-  const { engine, wallet, config } = deps;
-  const id = typeof msg.id === "string" || typeof msg.id === "number" ? msg.id : null;
-  const reply = (body: object) => send(client.ws, { type: "reply", id, ...body });
-
-  try {
-    if (msg.type === "auth") {
-      const session = verifySession(config.sessionSecret, msg.token);
-      if (!session) return reply({ ok: false, code: "UNAUTHORIZED", message: "invalid or expired session" });
-      client.session = session;
-      const { balance } = await wallet.balance({ playerId: session.playerId, currency: session.currency });
-      send(client.ws, {
-        type: "welcome",
-        state: engine.snapshot(),
-        displayName: config.displayName,
-        you: { label: session.label, currency: session.currency, balance: formatMinor(balance), bets: engine.playerBets(session.playerId) },
-      });
-      return reply({ ok: true });
-    }
-
-    const session = client.session;
-    if (!session) return reply({ ok: false, code: "UNAUTHORIZED", message: "log in first" });
-    const slot = Number(msg.slot);
-
-    if (msg.type === "bet") {
-      const amount = parseMajor(String(msg.amount ?? ""));
-      const auto = msg.autoCashout == null || msg.autoCashout === "" ? null : Math.round(Number(msg.autoCashout) * 100);
-      if (auto !== null && !Number.isFinite(auto)) return reply({ ok: false, code: "INVALID_BET", message: "bad auto cash-out" });
-      const bet = await engine.placeBet({ playerId: session.playerId, label: session.label, currency: session.currency, slot, amount, autoCashout: auto });
-      return reply({ ok: true, bet });
-    }
-    if (msg.type === "cancel") {
-      await engine.cancelBet(session.playerId, slot);
-      return reply({ ok: true });
-    }
-    if (msg.type === "cashout") {
-      return reply({ ok: true, bet: engine.cashout(session.playerId, slot) });
-    }
-    reply({ ok: false, code: "UNKNOWN", message: "unknown message type" });
-  } catch (err) {
-    if (err instanceof GameError) return reply({ ok: false, code: err.code, message: err.message });
-    if (err instanceof Error && /Invalid money amount/.test(err.message)) {
-      return reply({ ok: false, code: "INVALID_BET", message: "enter an amount like 10 or 10.50" });
-    }
-    console.error("[ws]", err);
-    reply({ ok: false, code: "INTERNAL", message: "something went wrong" });
-  }
-}
-
-function allow(c: Client): boolean {
-  const now = Date.now();
-  c.tokens = Math.min(20, c.tokens + ((now - c.last) / 1000) * 10);
-  c.last = now;
-  if (c.tokens < 1) return false;
-  c.tokens -= 1;
-  return true;
-}
-
-function send(ws: WebSocket, body: object) {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(body));
-}
-
 // ───────────────────────── HTTP ─────────────────────────
 
 async function handleHttp(deps: Deps, req: IncomingMessage, res: ServerResponse) {
-  const { engine, config } = deps;
+  const { config } = deps;
   const url = new URL(req.url ?? "/", "http://localhost");
+  // ?game=jet selects the jet crash game for the crash API routes.
+  const isJet = url.searchParams.get("game") === "jet" && Boolean(deps.jet);
+  const engine = isJet ? deps.jet! : deps.engine;
 
-  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+  // The jet game uses the same page; it reads its theme and settings from /api/config?game=jet.
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html" || (url.pathname === "/jet" && deps.jet))) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     return res.end(await readFile(INDEX_HTML));
   }
@@ -235,7 +105,22 @@ async function handleHttp(deps: Deps, req: IncomingMessage, res: ServerResponse)
   }
 
   if (req.method === "GET" && url.pathname === "/api/config") {
-    return json(res, 200, { displayName: config.displayName, devTools: config.devTools, telegramLogin: Boolean(config.telegramBotToken) });
+    return json(res, 200, {
+      game: isJet ? "jet" : "crash",
+      displayName: isJet ? config.jetDisplayName : config.displayName,
+      theme: isJet ? "jet" : "star",
+      wsPath: isJet ? "/ws/jet" : "/ws",
+      slots: engine.config.slots,
+      bettingMs: engine.config.bettingMs,
+      devTools: config.devTools,
+      telegramLogin: Boolean(config.telegramBotToken),
+      // Links to the other games on this server.
+      games: [
+        { path: "/", name: config.displayName },
+        ...(deps.jet ? [{ path: "/jet", name: config.jetDisplayName }] : []),
+        ...(deps.bingo ? [{ path: "/bingo", name: config.bingoDisplayName }] : []),
+      ],
+    });
   }
 
   if (req.method === "GET" && url.pathname === "/api/fairness") {

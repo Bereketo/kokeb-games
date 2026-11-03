@@ -21,6 +21,7 @@ const secret = `e2e-${randomBytes(24).toString("hex")}`; // fresh chain => start
 const chain = HashChain.fromSecret(secret, 500);
 const crashOf = (n: number) => crashPointFromHash(chain.hashForGame(n), SALT, 300);
 
+const jetChain = HashChain.fromSecret(`jet-${randomBytes(24).toString("hex")}`, 500);
 const db = createDb();
 const ledger = new Ledger(db, { timeoutMs: 60_000 });
 const wallet = new InProcessWallet(ledger);
@@ -31,20 +32,34 @@ const engine = new CrashEngine({
   config: { salt: SALT, bettingMs: 8_000, cooldownMs: 300 }, // wide window: remote DBs are slow
   log: () => {},
 });
+let jet: CrashEngine;
 let server: ReturnType<typeof startServer>;
 let loop: ReturnType<typeof setInterval>;
 
 beforeAll(async () => {
+  jet = new CrashEngine({
+    wallet,
+    store: new PrismaCrashStore(db, jetChain.commitment),
+    chain: jetChain,
+    config: { gameId: "jet", salt: "jet-salt", bettingMs: 8_000, cooldownMs: 300, slots: 3 },
+    log: () => {},
+  });
   await engine.start();
-  loop = setInterval(() => engine.step(), 20);
+  await jet.start();
+  loop = setInterval(() => {
+    engine.step();
+    jet.step();
+  }, 20);
   server = startServer({
     engine,
+    jet,
     wallet,
     ledger,
     db,
     config: {
       production: false, port: PORT, displayName: "Test", chainSecret: secret, chainLength: 500, salt: SALT,
       houseEdgeBps: 300, bettingMs: 8_000, cooldownMs: 300, sessionSecret: "e2e-session", devTools: true, telegramBotToken: "123456:TEST-bot-token",
+      jetDisplayName: "Jet", jetChainSecret: "j".repeat(32), jetChainLength: 50, jetSalt: "js", jetHouseEdgeBps: 300, jetBettingMs: 5_000, jetSlots: 3,
       bingoDisplayName: "Bingo", bingoDeckSeed: "e2e-deck", bingoCommissionBps: 2_000, bingoCountdownMs: 30_000, bingoDrawIntervalMs: 3_000,
     },
   });
@@ -54,6 +69,7 @@ afterAll(async () => {
   clearInterval(loop);
   await server.close();
   await engine.stop();
+  await jet.stop();
   await db.$disconnect();
 });
 
@@ -62,9 +78,9 @@ const post = async (path: string, body: unknown) =>
   (await fetch(base + path, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } })).json() as Promise<any>;
 
 /** Minimal game client. */
-function connect(): Promise<{ ws: WebSocket; next: (pred: (m: any) => boolean) => Promise<any>; call: (msg: object) => Promise<any> }> {
+function connect(path = "/ws"): Promise<{ ws: WebSocket; next: (pred: (m: any) => boolean) => Promise<any>; call: (msg: object) => Promise<any> }> {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
+    const ws = new WebSocket(`ws://localhost:${PORT}${path}`);
     const inbox: any[] = [];
     const waiters: { pred: (m: any) => boolean; resolve: (m: any) => void }[] = [];
     let seq = 0;
@@ -161,6 +177,28 @@ describe("game server end to end", () => {
     const forged = signInitDataForTesting("999:someone-elses-bot", { user: { id: tgId, first_name: "Hana" } });
     const res = await fetch(`${base}/auth/telegram`, { method: "POST", body: JSON.stringify({ initData: forged }) });
     expect(res.status).toBe(401);
+  });
+
+  it("runs the jet game separately: its own rounds, chain and three bet panels", async () => {
+    const cfg = (await (await fetch(`${base}/api/config?game=jet`)).json()) as any;
+    expect(cfg).toMatchObject({ game: "jet", wsPath: "/ws/jet", slots: 3, theme: "jet" });
+    const fair = (await (await fetch(`${base}/api/fairness?game=jet`)).json()) as any;
+    expect(fair.commitment).toBe(jetChain.commitment);
+    expect(fair.commitment).not.toBe(chain.commitment);
+
+    const login = await post("/dev/login", { name: `jet-${randomBytes(4).toString("hex")}` });
+    const c = await connect("/ws/jet");
+    expect((await c.call({ type: "auth", token: login.tokens.DEMO })).ok).toBe(true);
+    const betting = await c.next((m) => m.type === "round:betting" || (m.type === "welcome" && m.state.round?.status === "BETTING"));
+    void betting;
+    for (const slot of [0, 1, 2]) expect((await c.call({ type: "bet", slot, amount: "10", autoCashout: "1.01" })).ok).toBe(true);
+    expect((await c.call({ type: "bet", slot: 3, amount: "10", autoCashout: null })).code).toBe("INVALID_BET");
+    // the classic game's socket knows nothing about these bets
+    const classic = await connect("/ws");
+    const w = await classic.next((m) => m.type === "welcome");
+    expect(w.state.bets.some((b: any) => b.label === login.label)).toBe(false);
+    classic.ws.close();
+    c.ws.close();
   });
 
   it("publishes the fairness data a player needs to verify rounds", async () => {

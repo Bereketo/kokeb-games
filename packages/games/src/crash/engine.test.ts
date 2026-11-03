@@ -228,6 +228,29 @@ describe("crash engine: bets and cash-outs", () => {
   });
 });
 
+describe("crash engine: bet slots", () => {
+  it("supports a configurable number of bet panels", async () => {
+    const game = findGame((c) => c >= 300, 2);
+    const store = new MemoryCrashStore();
+    const wallet = new MemoryWallet();
+    let t = 0;
+    await store.saveRound({ id: "prev", number: game - 1, hash: chain.hashForGame(game - 1), crashPoint: 100, status: "CRASHED", bettingStartedAt: new Date(0), flyingStartedAt: new Date(0), crashedAt: new Date(0) });
+    const engine = new CrashEngine({ wallet, store, chain, config: { salt: SALT, bettingMs: 1_000, slots: 3 }, now: () => t, log: () => {} });
+    await engine.start();
+    wallet.addPlayer("p1", 10_000n);
+    for (const slot of [0, 1, 2]) await engine.placeBet(bet("p1", 100n, { slot, autoCashout: 150 + slot * 50 }));
+    await expectGameError(engine.placeBet(bet("p1", 100n, { slot: 3 })), "INVALID_BET");
+    expect(engine.playerBets("p1").map((b) => b.slot)).toEqual([0, 1, 2]);
+    t += 1_000;
+    engine.step();
+    t += msToReach(290);
+    engine.step();
+    await engine.idle();
+    // 100 at 1.50x + 100 at 2.00x + 100 at 2.50x
+    expect(wallet.peek("p1")).toBe(10_000n - 300n + 150n + 200n + 250n);
+  });
+});
+
 describe("crash engine: rules and failures", () => {
   it("validates bets and refuses them outside the betting phase", async () => {
     const game = findGame((c) => c >= 200);

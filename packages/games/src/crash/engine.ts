@@ -161,7 +161,9 @@ export class CrashEngine {
     if (!round || round.status !== "BETTING" || this.now() >= this.bettingEndsAt(round)) {
       throw new GameError("BETTING_CLOSED", "betting is closed, wait for the next round");
     }
-    if (input.slot !== 0 && input.slot !== 1) throw new GameError("INVALID_BET", "slot must be 0 or 1");
+    if (!Number.isInteger(input.slot) || input.slot < 0 || input.slot >= this.config.slots) {
+      throw new GameError("INVALID_BET", `slot must be between 0 and ${this.config.slots - 1}`);
+    }
     if (input.amount < this.config.minBet || input.amount > this.config.maxBet) {
       throw new GameError("INVALID_BET", `bet must be between ${this.config.minBet} and ${this.config.maxBet}`);
     }
@@ -280,12 +282,13 @@ export class CrashEngine {
         minBet: this.config.minBet.toString(),
         maxBet: this.config.maxBet.toString(),
         maxPayout: this.config.maxPayout.toString(),
+        slots: this.config.slots,
       },
     };
   }
 
   playerBets(playerId: string): PublicBet[] {
-    return [0, 1].flatMap((slot) => {
+    return Array.from({ length: this.config.slots }, (_, slot) => slot).flatMap((slot) => {
       const b = this.bets.get(`${playerId}:${slot}`);
       return b && b.status !== "REJECTED" ? [publicBet(b)] : [];
     });
