@@ -2,7 +2,7 @@
 
 **Kokeb** (ኮከብ, "star") is a real-money gaming platform for Ethiopian players, delivered as a Telegram bot and Mini App. Players deposit birr, play games like our **crash game** and **Bingo**, and withdraw their winnings.
 
-> **Status:** early development. Built and tested: wallet and ledger, the crash game, 75-ball bingo, the Telegram bot (registration with phone sharing) and Mini App login. Next: deposits and withdrawals with Chapa, the lobby, and the admin page.
+> **Status:** early development. Built and tested: wallet and ledger, the crash game, the jet crash game, 75-ball bingo, the Telegram bot (registration with phone sharing) and Mini App login. Next: deposits and withdrawals with Chapa, the lobby, and the admin page.
 
 ---
 
@@ -91,6 +91,10 @@ pnpm dev:game      # then open http://localhost:4001 and log in with any name
 ```
 
 Use **Demo** for play money, or switch to **Real** and press **+1000 ETB** (development only) to test with ETB.
+
+## Jet crash game
+
+A second crash game at `/jet`, running alongside the first with **its own rounds**: a separate provably-fair chain (`JET_CHAIN_SECRET`, `JET_SALT`), its own history, and its own house edge setting (`JET_HOUSE_EDGE_BPS`, 3% by default). It uses the same engine, wallet and page as the classic crash game, with **three bet panels** (`JET_SLOTS`) and a jet theme: a night sky with a jet climbing on a cyan trail. The name players see is `JET_DISPLAY_NAME`.
 
 ## 75-ball bingo
 
